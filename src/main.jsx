@@ -307,6 +307,23 @@ function App() {
                       {x.order_number} · {x.total_amount} บาท
                     </b>
                     <p>{x.soup_name} · {x.spice_level}</p>
+                    
+<div className="order-items">
+  <h3>รายการวัตถุดิบ</h3>
+  {(x.order_items || []).map(item => (
+    <div className="line" key={item.id}>
+      <span>
+        {item.ingredient_name} · {item.weight_grams} กรัม
+      </span>
+      <b>{Number(item.price).toFixed(2)} บาท</b>
+    </div>
+  ))}
+  <div className="line">
+    <strong>น้ำหนักรวม</strong>
+    <strong>{x.total_weight} กรัม</strong>
+  </div>
+</div>
+
                     <p>{x.order_status}</p>
                     <button onClick={() => updateOrder(x.id, 'preparing')}>
                       กำลังทำ
