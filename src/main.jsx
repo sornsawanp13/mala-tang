@@ -1,96 +1,128 @@
+              >
+                {submitting ? 'กำลังส่งออเดอร์...' : 'สั่งอาหาร'}
+              </button>
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { createRoot } from 'react-dom/client';
-import { createClient } from '@supabase/supabase-js';
-import './style.css';
+              <p className="sub">
+                ระบบอยู่ระหว่างทดสอบ ยังไม่เปิดรับออเดอร์จริง
+                และยังไม่เปิดรับชำระเงินออนไลน์
+              </p>
+            </section>
+          </>
+        ) : (
+          <>
+            <h2>ระบบหลังร้าน</h2>
 
-const url = import.meta.env.VITE_SUPABASE_URL;
-const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const db = url && key ? createClient(url, key) : null;
+            {!session ? (
+              <form className="panel login" onSubmit={login}>
+                <label>
+                  อีเมล
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    required
+                  />
+                </label>
 
-function App() {
-  const [ingredients, setIngredients] = useState([]);
-  const [soups, setSoups] = useState([]);
-  const [chosen, setChosen] = useState({});
-  const [soup, setSoup] = useState('');
-  const [spice, setSpice] = useState('เผ็ดกลาง');
-  const [page, setPage] = useState('shop');
-  const [session, setSession] = useState(null);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [orders, setOrders] = useState([]);
-  const [notice, setNotice] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [allIngredients, setAllIngredients] = useState([]);
-  const [adminTab, setAdminTab] = useState('orders');
-  const [editingId, setEditingId] = useState(null);
-  const [savingItem, setSavingItem] = useState(false);
-  const emptyItem = { name: '', category: 'วัตถุดิบ', price_per_100g: '25', weight_options: '50,100,150,200', is_available: true };
-  const [itemForm, setItemForm] = useState(emptyItem);
+                <label>
+                  รหัสผ่าน
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    required
+                  />
+                </label>
 
-  useEffect(() => {
-    if (!db) return;
+                <button className="primary">เข้าสู่ระบบ</button>
+              </form>
+            ) : (
+              <section className="panel">
+                <p>เข้าสู่ระบบ: {session.user.email}</p>
 
-    Promise.all([
-      db.from('ingredients').select('*').eq('is_available', true),
-      db.from('soups').select('*').eq('is_available', true)
-    ]).then(([a, b]) => {
-      if (a.error || b.error) {
-        setNotice(a.error?.message || b.error?.message);
-      }
-      setIngredients(a.data || []);
-      setSoups(b.data || []);
-      if (b.data?.length) setSoup(b.data[0].name);
-    });
+                <button onClick={() => db.auth.signOut()}>
+                  ออกจากระบบ
+                </button>
 
-    db.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-    });
+                <div className="choices" style={{margin:'16px 0'}}>
+                  <button className={adminTab === 'orders' ? 'active' : ''} onClick={() => setAdminTab('orders')}>ออเดอร์</button>
+                  <button className={adminTab === 'ingredients' ? 'active' : ''} onClick={() => {setAdminTab('ingredients'); refreshIngredients();}}>จัดการวัตถุดิบ</button>
+                </div>
+                {adminTab === 'ingredients' ? (
+                  <div>
+                    <h2>จัดการวัตถุดิบและราคา</h2>
+                    <p>ปรับข้อมูลได้ภายหลัง ราคาคิดเป็นบาทต่อ 100 กรัม</p>
+                    <form onSubmit={saveIngredient} className="panel" style={{display:'grid',gap:12}}>
+                      <h3>{editingId ? 'แก้ไขวัตถุดิบ' : 'เพิ่มวัตถุดิบใหม่'}</h3>
+                      <label>ชื่อวัตถุดิบ <input required value={itemForm.name} onChange={e=>setItemForm({...itemForm,name:e.target.value})}/></label>
+                      <label>หมวดหมู่ <input value={itemForm.category} onChange={e=>setItemForm({...itemForm,category:e.target.value})}/></label>
+                      <label>ราคา (บาท / 100 กรัม) <input type="number" min="0.01" step="0.01" required value={itemForm.price_per_100g} onChange={e=>setItemForm({...itemForm,price_per_100g:e.target.value})}/></label>
+                      <label>น้ำหนักที่ลูกค้าเลือกได้ (คั่นด้วยจุลภาค) <input required placeholder="50,100,150,200" value={itemForm.weight_options} onChange={e=>setItemForm({...itemForm,weight_options:e.target.value})}/></label>
+                      <label><input type="checkbox" checked={itemForm.is_available} onChange={e=>setItemForm({...itemForm,is_available:e.target.checked})}/> เปิดขาย</label>
+                      <button className="primary" type="submit" disabled={savingItem}>{savingItem ? 'กำลังบันทึก...' : 'บันทึกสินค้า'}</button>
+                      {editingId && <button type="button" onClick={()=>{setEditingId(null);setItemForm(emptyItem);}}>ยกเลิกแก้ไข</button>}
+                    </form>
+                    <h3>สินค้าทั้งหมด ({allIngredients.length})</h3>
+                    {allIngredients.map(item => (
+                      <article className="order" key={item.id}>
+                        <b>{item.name} — {Number(item.price_per_100g).toFixed(2)} บาท / 100 กรัม</b>
+                        <p>{item.category || 'วัตถุดิบ'} · น้ำหนัก {(item.weight_options || []).join(', ')} กรัม</p>
+                        <p>{item.is_available ? '🟢 เปิดขาย' : '⚪ ปิดขาย'}</p>
+                        <button onClick={()=>editIngredient(item)}>แก้ไข</button>{' '}
+                        <button onClick={()=>toggleIngredient(item)}>{item.is_available ? 'ปิดขาย' : 'เปิดขาย'}</button>
+                      </article>
+                    ))}
+                  </div>
+                ) : <>
+                <button className="primary" onClick={loadOrders}>
+                  โหลดออเดอร์
+                </button>
 
-    const { data: sub } = db.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-    });
+                {orders.map(x => (
+                  <article className="order" key={x.id}>
+                    <b>
+                      {x.order_number} · {x.total_amount} บาท
+                    </b>
+                    <p>{x.soup_name} · {x.spice_level}</p>
+                    
+<div className="order-items">
+  <h3>รายการวัตถุดิบ</h3>
+  {(x.order_items || []).map(item => (
+    <div className="line" key={item.id}>
+      <span>
+        {item.ingredient_name} · {item.weight_grams} กรัม
+      </span>
+      <b>{Number(item.price).toFixed(2)} บาท</b>
+    </div>
+  ))}
+  <div className="line">
+    <strong>น้ำหนักรวม</strong>
+    <strong>{x.total_weight} กรัม</strong>
+  </div>
+</div>
 
-    return () => sub.subscription.unsubscribe();
-  }, []);
+                    <p>{x.order_status}</p>
+                    <button onClick={() => updateOrder(x.id, 'preparing')}>
+                      กำลังทำ
+                    </button>
+                    <button onClick={() => updateOrder(x.id, 'completed')}>
+                      เสร็จแล้ว
+                    </button>
+                  </article>
+                ))}
+                </>}
+              </section>
+            )}
+          </>
+        )}
 
-  const cart = useMemo(() => (
-    ingredients
-      .filter(x => chosen[x.id])
-      .map(x => ({
-        ...x,
-        grams: Number(chosen[x.id]),
-        price: Number(chosen[x.id]) * Number(x.price_per_100g) / 100
-      }))
-  ), [ingredients, chosen]);
+        {notice && (
+          <div className="notice" onClick={() => setNotice('')}>
+            {notice} ✕
+          </div>
+        )}
+      </main>
 
-  const grams = cart.reduce((sum, x) => sum + x.grams, 0);
-  const total = cart.reduce((sum, x) => sum + x.price, 0);
-
-  async function submitOrder() {
-    if (submitting || !db || !cart.length || !soup) return;
-
-    setSubmitting(true);
-    setNotice('กำลังส่งออเดอร์...');
-
-    try {
-      const { data, error } = await db.functions.invoke('create-order', {
-        body: {
-          items: cart.map(x => ({
-            ingredient_id: x.id,
-            weight_grams: x.grams
-          })),
-          soup_name: soup,
-          spice_level: spice,
-          payment_method: 'cash'
-        }
-      });
-
-      if (error) throw error;
-      if (!data?.success) {
-        throw new Error(data?.error || 'ส่งออเดอร์ไม่สำเร็จ');
-      }
-
-      setNotice(
-        'รับออเดอร์แล้ว เลขที่ ' + data.order_number +
-        ' ยอด ' + Number(data.total_amount).toFixed(2) +
+      <footer>หม่าล่าทั่ง · Mala Tang</footer>
+    </>
+  );
