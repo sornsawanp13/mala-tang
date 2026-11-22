@@ -4,11 +4,14 @@ import { createRoot } from 'react-dom/client';
 import { createClient } from '@supabase/supabase-js';
 import './style.css';
 
-const url = import.meta.env.VITE_SUPABASE_URL;
-const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const db = url && key ? createClient(url, key) : null;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-const emptyItem = {
+const db = supabaseUrl && supabaseKey
+  ? createClient(supabaseUrl, supabaseKey)
+  : null;
+
+const emptyIngredient = {
   name: '',
   category: 'วัตถุดิบ',
   price_per_100g: '25',
@@ -17,48 +20,57 @@ const emptyItem = {
 };
 
 function App() {
+  const [page, setPage] = useState('shop');
   const [ingredients, setIngredients] = useState([]);
   const [soups, setSoups] = useState([]);
-  const [chosen, setChosen] = useState({});
+  const [selectedWeights, setSelectedWeights] = useState({});
+  const [cart, setCart] = useState([]);
   const [soup, setSoup] = useState('');
   const [spice, setSpice] = useState('เผ็ดกลาง');
-  const [page, setPage] = useState('shop');
-  const [adminTab, setAdminTab] = useState('orders');
   const [session, setSession] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [checkingAdmin, setCheckingAdmin] = useState(false);
+  const [adminTab, setAdminTab] = useState('orders');
+  const [orders, setOrders] = useState([]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [orders, setOrders] = useState([]);
   const [notice, setNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [itemForm, setItemForm] = useState({ ...emptyItem });
+  const [itemForm, setItemForm] = useState({
+    ...emptyIngredient
+  });
 
   async function loadMenu() {
     if (!db) return;
 
-    const [a, b] = await Promise.all([
+    const [ingredientResult, soupResult] = await Promise.all([
       db.from('ingredients').select('*').order('name'),
-      db.from('soups').select('*').eq('is_available', true)
+      db.from('soups').select('*')
     ]);
 
-    if (a.error || b.error) {
-      setNotice(a.error?.message || b.error?.message);
+    if (ingredientResult.error || soupResult.error) {
+      setNotice(
+        ingredientResult.error?.message ||
+        soupResult.error?.message
+      );
       return;
     }
 
-    setIngredients(a.data || []);
-    setSoups(b.data || []);
+    setIngredients(ingredientResult.data || []);
 
-    if (b.data?.length) {
-      setSoup(current =>
-        b.data.some(x => x.name === current)
-          ? current
-          : b.data[0].name
-      );
-    }
+    const activeSoups = (soupResult.data || []).filter(
+      x => x.is_available !== false
+    );
+
+    setSoups(activeSoups);
+
+    setSoup(current =>
+      activeSoups.some(x => x.name === current)
+        ? current
+        : activeSoups[0]?.name || ''
+    );
   }
 
   useEffect(() => {
@@ -70,13 +82,14 @@ function App() {
       setSession(data.session);
     });
 
-    const { data: listener } = db.auth.onAuthStateChange(
-      (_event, currentSession) => {
-        setSession(currentSession);
-      }
-    );
+    const { data: authListener } =
+      db.auth.onAuthStateChange((_event, nextSession) => {
+        setSession(nextSession);
+      });
 
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -99,11 +112,18 @@ function App() {
         .limit(1);
 
       if (!cancelled) {
-        setIsAdmin(!error && Array.isArray(data) && data.length > 0);
+        setIsAdmin(
+          !error &&
+          Array.isArray(data) &&
+          data.length > 0
+        );
         setCheckingAdmin(false);
 
         if (error) {
-          setNotice('ตรวจสอบสิทธิ์ผู้ดูแลไม่ได้: ' + error.message);
+          setNotice(
+            'ตรวจสอบสิทธิ์ผู้ดูแลไม่ได้: ' +
+            error.message
+          );
         }
       }
     }
@@ -115,40 +135,124 @@ function App() {
     };
   }, [session?.user?.id]);
 
-  const availableIngredients = ingredients.filter(
-    x => x.is_available !== false
+  const totalWeight = cart.reduce(
+    (sum, item) => sum + item.grams,
+    0
   );
 
-  const cart = useMemo(() => (
-    availableIngredients
-      .filter(x => chosen[x.id])
-      .map(x => ({
-        ...x,
-        grams: Number(chosen[x.id]),
-        price:
-          Number(chosen[x.id]) *
-          Number(x.price_per_100g) / 100
-      }))
-  ), [ingredients, chosen]);
+  const totalPrice = cart.reduce(
+    (sum, item) => sum + item.price,
+    0
+  );
 
-  const grams = cart.reduce((sum, x) => sum + x.grams, 0);
-  const total = cart.reduce((sum, x) => sum + x.price, 0);
+  const cartCount = cart.length;
+
+  function getWeight(item) {
+    const options = item.weight_options || [];
+
+    return Number(
+      selectedWeights[item.id] || options[0] || 0
+    );
+  }
+
+  function addToCart(item) {
+    if (item.is_available === false) {
+      setNotice('สินค้านี้หมดแล้ว');
+      return;
+    }
+
+    const weight = getWeight(item);
+
+    if (
+      !Number.isSafeInteger(weight) ||
+      weight <= 0 ||
+      !(item.weight_options || []).includes(weight)
+    ) {
+      setNotice('กรุณาเลือกน้ำหนักที่ถูกต้อง');
+      return;
+    }
+
+    const price =
+      weight * Number(item.price_per_100g) / 100;
+
+    setCart(current => [
+      ...current,
+      {
+        cartId:
+          Date.now().toString() +
+          '-' +
+          Math.random().toString(36).slice(2),
+        ingredientId: item.id,
+        name: item.name,
+        grams: weight,
+        price
+      }
+    ]);
+
+    setNotice(
+      'เพิ่ม ' + item.name +
+      ' ' + weight + ' กรัม ลงตะกร้าแล้ว'
+    );
+  }
+
+  function removeFromCart(cartId) {
+    setCart(current =>
+      current.filter(item => item.cartId !== cartId)
+    );
+  }
+
+  function clearCart() {
+    setCart([]);
+  }
 
   async function submitOrder() {
-    if (!db || submitting || !cart.length || !soup) return;
+    if (!db || submitting || !cart.length || !soup) {
+      return;
+    }
+
+    const availableIds = new Set(
+      ingredients
+        .filter(x => x.is_available !== false)
+        .map(x => String(x.id))
+    );
+
+    if (
+      cart.some(item =>
+        !availableIds.has(String(item.ingredientId))
+      )
+    ) {
+      setNotice(
+        'มีสินค้าที่หมดแล้วในตะกร้า กรุณาลบออกก่อน'
+      );
+      return;
+    }
 
     setSubmitting(true);
     setNotice('กำลังส่งออเดอร์...');
 
     try {
+      const grouped = new Map();
+
+      for (const item of cart) {
+        const id = String(item.ingredientId);
+        grouped.set(
+          id,
+          (grouped.get(id) || 0) + item.grams
+        );
+      }
+
+      const items = [...grouped].map(
+        ([ingredient_id, weight_grams]) => ({
+          ingredient_id,
+          weight_grams
+        })
+      );
+
       const { data, error } = await db.functions.invoke(
         'create-order',
         {
           body: {
-            items: cart.map(x => ({
-              ingredient_id: x.id,
-              weight_grams: x.grams
-            })),
+            items,
             soup_name: soup,
             spice_level: spice,
             payment_method: 'cash'
@@ -159,8 +263,12 @@ function App() {
       if (error) throw error;
 
       if (!data?.success) {
-        throw new Error(data?.error || 'ส่งออเดอร์ไม่สำเร็จ');
+        throw new Error(
+          data?.error || 'ส่งออเดอร์ไม่สำเร็จ'
+        );
       }
+
+      setCart([]);
 
       setNotice(
         'รับออเดอร์แล้ว เลขที่ ' +
@@ -169,10 +277,10 @@ function App() {
         Number(data.total_amount).toFixed(2) +
         ' บาท กรุณาชำระเงินสดที่ร้าน'
       );
-
-      setChosen({});
     } catch (error) {
-      setNotice('ส่งออเดอร์ไม่สำเร็จ: ' + error.message);
+      setNotice(
+        'ส่งออเดอร์ไม่สำเร็จ: ' + error.message
+      );
     } finally {
       setSubmitting(false);
     }
@@ -188,7 +296,10 @@ function App() {
       password
     });
 
-    setNotice(error ? error.message : 'เข้าสู่ระบบแล้ว');
+    setNotice(
+      error ? error.message : 'เข้าสู่ระบบแล้ว'
+    );
+
     setPassword('');
   }
 
@@ -199,11 +310,12 @@ function App() {
 
     if (error) {
       setNotice(error.message);
-    } else {
-      setOrders([]);
-      setIsAdmin(false);
-      setNotice('ออกจากระบบแล้ว');
+      return;
     }
+
+    setIsAdmin(false);
+    setOrders([]);
+    setNotice('ออกจากระบบแล้ว');
   }
 
   async function loadOrders() {
@@ -237,21 +349,24 @@ function App() {
     }
 
     await loadOrders();
-    setNotice('อัปเดตสถานะแล้ว');
+    setNotice('อัปเดตสถานะออเดอร์แล้ว');
   }
 
   function newIngredient() {
     setEditingId(null);
-    setItemForm({ ...emptyItem });
+    setItemForm({ ...emptyIngredient });
   }
 
   function editIngredient(item) {
     setEditingId(item.id);
+
     setItemForm({
       name: item.name || '',
       category: item.category || 'วัตถุดิบ',
-      price_per_100g: String(item.price_per_100g ?? 25),
-      weight_options: (item.weight_options || []).join(','),
+      price_per_100g:
+        String(item.price_per_100g ?? 25),
+      weight_options:
+        (item.weight_options || []).join(','),
       is_available: item.is_available !== false
     });
   }
@@ -281,11 +396,8 @@ function App() {
       return;
     }
 
-    if (
-      !Number.isFinite(price) ||
-      price <= 0
-    ) {
-      setNotice('กรุณากำหนดราคามากกว่า 0 บาท');
+    if (!Number.isFinite(price) || price <= 0) {
+      setNotice('ราคาต้องมากกว่า 0 บาท');
       return;
     }
 
@@ -297,38 +409,34 @@ function App() {
         x > 10000
       )
     ) {
-      setNotice('ตัวเลือกน้ำหนักต้องเป็นจำนวนเต็มบวก เช่น 50,100,150');
+      setNotice(
+        'น้ำหนักต้องเป็นจำนวนเต็มบวก เช่น 50,100,150'
+      );
       return;
     }
-
-    const uniqueWeights = [...new Set(weights)]
-      .sort((a, b) => a - b);
 
     const payload = {
       name,
       category,
       price_per_100g: price,
-      weight_options: uniqueWeights,
+      weight_options:
+        [...new Set(weights)].sort((a, b) => a - b),
       is_available: itemForm.is_available
     };
 
     setSaving(true);
 
     try {
-      let result;
-
-      if (editingId) {
-        result = await db
-          .from('ingredients')
-          .update(payload)
-          .eq('id', editingId)
-          .select();
-      } else {
-        result = await db
-          .from('ingredients')
-          .insert(payload)
-          .select();
-      }
+      const result = editingId
+        ? await db
+            .from('ingredients')
+            .update(payload)
+            .eq('id', editingId)
+            .select()
+        : await db
+            .from('ingredients')
+            .insert(payload)
+            .select();
 
       if (result.error) throw result.error;
 
@@ -340,9 +448,12 @@ function App() {
 
       await loadMenu();
       newIngredient();
-      setNotice('บันทึกวัตถุดิบสำเร็จ');
+
+      setNotice('บันทึกข้อมูลวัตถุดิบสำเร็จ');
     } catch (error) {
-      setNotice('บันทึกไม่สำเร็จ: ' + error.message);
+      setNotice(
+        'บันทึกไม่สำเร็จ: ' + error.message
+      );
     } finally {
       setSaving(false);
     }
@@ -356,7 +467,7 @@ function App() {
     const { data, error } = await db
       .from('ingredients')
       .update({
-        is_available: !item.is_available
+        is_available: item.is_available === false
       })
       .eq('id', item.id)
       .select();
@@ -366,14 +477,35 @@ function App() {
     if (error || !data?.length) {
       setNotice(
         'เปลี่ยนสถานะไม่สำเร็จ: ' +
-        (error?.message || 'กรุณาตรวจสอบสิทธิ์')
+        (error?.message || 'ไม่มีสิทธิ์แก้ไข')
       );
       return;
     }
 
     await loadMenu();
-    setNotice('เปลี่ยนสถานะสินค้าแล้ว');
+
+    setNotice(
+      item.is_available === false
+        ? 'เปิดขายสินค้าแล้ว'
+        : 'ปิดขายสินค้าแล้ว หน้าร้านจะแสดงสินค้าหมด'
+    );
   }
+
+  const groupedIngredients = useMemo(() => {
+    const groups = {};
+
+    for (const item of ingredients) {
+      const category = item.category || 'วัตถุดิบ';
+
+      if (!groups[category]) {
+        groups[category] = [];
+      }
+
+      groups[category].push(item);
+    }
+
+    return groups;
+  }, [ingredients]);
 
   return (
     <>
@@ -382,9 +514,11 @@ function App() {
           <b>麻辣烫 · MALA TANG</b>
 
           <button
-            onClick={() => setPage(
-              page === 'shop' ? 'admin' : 'shop'
-            )}
+            onClick={() =>
+              setPage(
+                page === 'shop' ? 'admin' : 'shop'
+              )
+            }
           >
             {page === 'shop' ? 'หลังร้าน' : 'หน้าร้าน'}
           </button>
@@ -393,7 +527,7 @@ function App() {
         <h1>หม่าล่าทั่ง</h1>
         <p>เลือกวัตถุดิบ ชั่งน้ำหนัก อร่อยตามใจ</p>
         <span className="price">
-          เริ่มต้น 25 บาท / 100 กรัม
+          เลือกกรัมแล้วเพิ่มใส่ตะกร้า
         </span>
       </header>
 
@@ -407,56 +541,135 @@ function App() {
           <>
             <h2>① เลือกวัตถุดิบ</h2>
             <p className="sub">
-              เลือกน้ำหนักแต่ละรายการได้
+              เลือกจำนวนกรัม แล้วกดเพิ่มใส่ตะกร้า
             </p>
 
-            <div className="grid">
-              {availableIngredients.map(x => (
-                <article key={x.id}>
-                  <div className="emoji">🥢</div>
+            {Object.entries(groupedIngredients).map(
+              ([category, items]) => (
+                <section key={category}>
+                  <h3>{category}</h3>
 
-                  <div>
-                    <strong>{x.name}</strong>
+                  <div className="grid">
+                    {items.map(item => {
+                      const soldOut =
+                        item.is_available === false;
 
-                    <small>
-                      {x.category || 'วัตถุดิบ'}
-                      {' · '}
-                      {x.price_per_100g} บาท / 100 กรัม
-                    </small>
+                      const weight = getWeight(item);
 
-                    <select
-                      value={chosen[x.id] || ''}
-                      onChange={event => setChosen({
-                        ...chosen,
-                        [x.id]: event.target.value
-                      })}
-                    >
-                      <option value="">ไม่เลือก</option>
+                      const price =
+                        weight *
+                        Number(item.price_per_100g) /
+                        100;
 
-                      {(x.weight_options || []).map(w => (
-                        <option key={w} value={w}>
-                          {w} กรัม
-                        </option>
-                      ))}
-                    </select>
+                      return (
+                        <article
+                          key={item.id}
+                          style={{
+                            opacity: soldOut ? 0.65 : 1
+                          }}
+                        >
+                          <div className="emoji">
+                            {soldOut ? '🚫' : '🥢'}
+                          </div>
+
+                          <div>
+                            <strong>{item.name}</strong>
+
+                            <small>
+                              {item.price_per_100g}
+                              {' บาท / 100 กรัม'}
+                            </small>
+
+                            {soldOut ? (
+                              <>
+                                <p
+                                  style={{
+                                    color: '#c62828',
+                                    fontWeight: 'bold'
+                                  }}
+                                >
+                                  สินค้าหมด
+                                </p>
+
+                                <button disabled>
+                                  สินค้าหมด
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <label>
+                                  เลือกน้ำหนัก
+                                  <select
+                                    value={weight}
+                                    onChange={event =>
+                                      setSelectedWeights(
+                                        current => ({
+                                          ...current,
+                                          [item.id]:
+                                            Number(
+                                              event.target.value
+                                            )
+                                        })
+                                      )
+                                    }
+                                  >
+                                    {(
+                                      item.weight_options || []
+                                    ).map(w => (
+                                      <option
+                                        key={w}
+                                        value={w}
+                                      >
+                                        {w} กรัม
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+
+                                <p>
+                                  ราคา{' '}
+                                  <b>
+                                    {price.toFixed(2)}
+                                    {' บาท'}
+                                  </b>
+                                </p>
+
+                                <button
+                                  className="primary"
+                                  disabled={
+                                    !(item.weight_options || [])
+                                      .length
+                                  }
+                                  onClick={() =>
+                                    addToCart(item)
+                                  }
+                                >
+                                  + เพิ่มใส่ตะกร้า
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
                   </div>
-                </article>
-              ))}
-            </div>
+                </section>
+              )
+            )}
 
             <section className="panel">
               <h2>② เลือกน้ำซุป</h2>
 
               <div className="choices">
-                {soups.map(x => (
+                {soups.map(item => (
                   <button
-                    key={x.id}
+                    key={item.id}
                     className={
-                      soup === x.name ? 'active' : ''
+                      soup === item.name ? 'active' : ''
                     }
-                    onClick={() => setSoup(x.name)}
+                    onClick={() => setSoup(item.name)}
                   >
-                    {x.name}
+                    {item.name}
                   </button>
                 ))}
               </div>
@@ -469,33 +682,59 @@ function App() {
                   'เผ็ดน้อย',
                   'เผ็ดกลาง',
                   'เผ็ดมาก'
-                ].map(x => (
+                ].map(level => (
                   <button
-                    key={x}
-                    className={spice === x ? 'active' : ''}
-                    onClick={() => setSpice(x)}
+                    key={level}
+                    className={
+                      spice === level ? 'active' : ''
+                    }
+                    onClick={() => setSpice(level)}
                   >
-                    {x}
+                    {level}
                   </button>
                 ))}
               </div>
             </section>
 
             <section className="panel cart">
-              <h2>ตะกร้าสินค้า</h2>
+              <h2>
+                🛒 ตะกร้าสินค้า ({cartCount})
+              </h2>
 
-              {cart.length ? (
-                cart.map(x => (
-                  <div className="line" key={x.id}>
-                    <span>
-                      {x.name} · {x.grams} กรัม
-                    </span>
-
-                    <b>{x.price.toFixed(2)} บาท</b>
-                  </div>
-                ))
-              ) : (
+              {!cart.length ? (
                 <p>ยังไม่มีสินค้าในตะกร้า</p>
+              ) : (
+                <>
+                  {cart.map(item => (
+                    <div
+                      className="line"
+                      key={item.cartId}
+                    >
+                      <span>
+                        {item.name}
+                        {' · '}
+                        {item.grams} กรัม
+                      </span>
+
+                      <b>
+                        {item.price.toFixed(2)}
+                        {' บาท'}
+                      </b>
+
+                      <button
+                        onClick={() =>
+                          removeFromCart(item.cartId)
+                        }
+                      >
+                        ลบ
+                      </button>
+                    </div>
+                  ))}
+
+                  <button onClick={clearCart}>
+                    ล้างตะกร้า
+                  </button>
+                </>
               )}
 
               <div className="line">
@@ -509,8 +748,15 @@ function App() {
               </div>
 
               <div className="line">
-                <b>น้ำหนักรวม {grams} กรัม</b>
-                <strong>{total.toFixed(2)} บาท</strong>
+                <strong>น้ำหนักรวม</strong>
+                <strong>{totalWeight} กรัม</strong>
+              </div>
+
+              <div className="line">
+                <strong>ยอดรวม</strong>
+                <strong>
+                  {totalPrice.toFixed(2)} บาท
+                </strong>
               </div>
 
               <button
@@ -524,13 +770,12 @@ function App() {
               >
                 {submitting
                   ? 'กำลังส่งออเดอร์...'
-                  : 'สั่งอาหาร'}
+                  : 'ยืนยันสั่งอาหาร'}
               </button>
 
               <p className="sub">
-                ระบบอยู่ระหว่างทดสอบ
-                ยังไม่เปิดรับออเดอร์จริง
-                และยังไม่เปิดรับชำระเงินออนไลน์
+                ระบบทดสอบ ชำระเงินสดที่ร้าน
+                ยังไม่เปิดรับชำระเงินออนไลน์
               </p>
             </section>
           </>
@@ -539,7 +784,10 @@ function App() {
             <h2>ระบบหลังร้าน</h2>
 
             {!session ? (
-              <form className="panel login" onSubmit={login}>
+              <form
+                className="panel login"
+                onSubmit={login}
+              >
                 <label>
                   อีเมล
                   <input
@@ -564,20 +812,24 @@ function App() {
                   />
                 </label>
 
-                <button className="primary">
+                <button
+                  className="primary"
+                  type="submit"
+                >
                   เข้าสู่ระบบ
                 </button>
               </form>
             ) : checkingAdmin ? (
               <section className="panel">
-                <p>กำลังตรวจสอบสิทธิ์ผู้ดูแล...</p>
+                กำลังตรวจสอบสิทธิ์ผู้ดูแล...
               </section>
             ) : !isAdmin ? (
               <section className="panel">
                 <h2>ไม่มีสิทธิ์จัดการร้าน</h2>
+
                 <p>
-                  บัญชีนี้ยังไม่ได้รับสิทธิ์ผู้ดูแล
-                  กรุณาตรวจสอบตาราง admin_users
+                  กรุณาตรวจสอบสิทธิ์ในตาราง
+                  admin_users
                 </p>
 
                 <button onClick={logout}>
@@ -586,7 +838,9 @@ function App() {
               </section>
             ) : (
               <section className="panel">
-                <p>เข้าสู่ระบบ: {session.user.email}</p>
+                <p>
+                  ผู้ดูแล: {session.user.email}
+                </p>
 
                 <button onClick={logout}>
                   ออกจากระบบ
@@ -595,16 +849,22 @@ function App() {
                 <div className="choices">
                   <button
                     className={
-                      adminTab === 'orders' ? 'active' : ''
+                      adminTab === 'orders'
+                        ? 'active'
+                        : ''
                     }
-                    onClick={() => setAdminTab('orders')}
+                    onClick={() =>
+                      setAdminTab('orders')
+                    }
                   >
-                    จัดการออเดอร์
+                    ออเดอร์
                   </button>
 
                   <button
                     className={
-                      adminTab === 'ingredients' ? 'active' : ''
+                      adminTab === 'ingredients'
+                        ? 'active'
+                        : ''
                     }
                     onClick={() => {
                       setAdminTab('ingredients');
@@ -626,55 +886,70 @@ function App() {
                       โหลดออเดอร์
                     </button>
 
-                    {orders.map(x => (
-                      <article className="order" key={x.id}>
+                    {orders.map(order => (
+                      <article
+                        className="order"
+                        key={order.id}
+                      >
                         <b>
-                          {x.order_number}
+                          {order.order_number}
                           {' · '}
-                          {Number(x.total_amount).toFixed(2)}
+                          {Number(
+                            order.total_amount
+                          ).toFixed(2)}
                           {' บาท'}
                         </b>
 
                         <p>
-                          {x.soup_name}
+                          {order.soup_name}
                           {' · '}
-                          {x.spice_level}
+                          {order.spice_level}
                         </p>
 
-                        <h3>รายการวัตถุดิบ</h3>
+                        <h3>รายการสินค้า</h3>
 
-                        {(x.order_items || []).map(item => (
-                          <div
-                            className="line"
-                            key={item.id}
-                          >
-                            <span>
-                              {item.ingredient_name}
-                              {' · '}
-                              {item.weight_grams} กรัม
-                            </span>
+                        {(order.order_items || []).map(
+                          item => (
+                            <div
+                              className="line"
+                              key={item.id}
+                            >
+                              <span>
+                                {item.ingredient_name}
+                                {' · '}
+                                {item.weight_grams}
+                                {' กรัม'}
+                              </span>
 
-                            <b>
-                              {Number(item.price).toFixed(2)}
-                              {' บาท'}
-                            </b>
-                          </div>
-                        ))}
-
-                        <div className="line">
-                          <strong>น้ำหนักรวม</strong>
-                          <strong>
-                            {x.total_weight} กรัม
-                          </strong>
-                        </div>
+                              <b>
+                                {Number(
+                                  item.price
+                                ).toFixed(2)}
+                                {' บาท'}
+                              </b>
+                            </div>
+                          )
+                        )}
 
                         <p>
-                          สถานะ: {x.order_status}
+                          น้ำหนักรวม:
+                          {' '}
+                          {order.total_weight}
+                          {' กรัม'}
+                        </p>
+
+                        <p>
+                          สถานะ:
+                          {' '}
+                          {order.order_status}
                         </p>
 
                         <button
                           onClick={() =>
-                            updateOrder(x.id, 'preparing')
+                            updateOrder(
+                              order.id,
+                              'preparing'
+                            )
                           }
                         >
                           กำลังทำ
@@ -682,7 +957,10 @@ function App() {
 
                         <button
                           onClick={() =>
-                            updateOrder(x.id, 'completed')
+                            updateOrder(
+                              order.id,
+                              'completed'
+                            )
                           }
                         >
                           เสร็จแล้ว
@@ -695,8 +973,8 @@ function App() {
                     <h2>จัดการวัตถุดิบ</h2>
 
                     <p>
-                      เพิ่มสินค้า เปลี่ยนราคา น้ำหนัก
-                      และเปิด–ปิดขายได้
+                      ปิดขาย = หน้าร้านแสดง
+                      "สินค้าหมด"
                     </p>
 
                     <button onClick={newIngredient}>
@@ -723,7 +1001,6 @@ function App() {
                               event.target.value
                             )
                           }
-                          placeholder="เช่น เห็ดเข็มทอง"
                           required
                         />
                       </label>
@@ -743,12 +1020,14 @@ function App() {
                       </label>
 
                       <label>
-                        ราคาต่อ 100 กรัม (บาท)
+                        ราคาต่อ 100 กรัม
                         <input
                           type="number"
                           min="0.01"
                           step="0.01"
-                          value={itemForm.price_per_100g}
+                          value={
+                            itemForm.price_per_100g
+                          }
                           onChange={event =>
                             changeItem(
                               'price_per_100g',
@@ -762,7 +1041,9 @@ function App() {
                       <label>
                         ตัวเลือกน้ำหนัก (กรัม)
                         <input
-                          value={itemForm.weight_options}
+                          value={
+                            itemForm.weight_options
+                          }
                           onChange={event =>
                             changeItem(
                               'weight_options',
@@ -777,7 +1058,9 @@ function App() {
                       <label>
                         <input
                           type="checkbox"
-                          checked={itemForm.is_available}
+                          checked={
+                            itemForm.is_available
+                          }
                           onChange={event =>
                             changeItem(
                               'is_available',
@@ -795,7 +1078,7 @@ function App() {
                       >
                         {saving
                           ? 'กำลังบันทึก...'
-                          : 'บันทึกข้อมูลสินค้า'}
+                          : 'บันทึกข้อมูล'}
                       </button>
 
                       {editingId && (
@@ -808,48 +1091,61 @@ function App() {
                       )}
                     </form>
 
-                    <h3>รายการวัตถุดิบทั้งหมด</h3>
+                    <h3>วัตถุดิบทั้งหมด</h3>
 
-                    {ingredients.map(x => (
+                    {ingredients.map(item => (
                       <article
                         className="order"
-                        key={x.id}
+                        key={item.id}
                       >
-                        <b>{x.name}</b>
+                        <b>{item.name}</b>
 
                         <p>
-                          {x.category}
+                          {item.category}
                           {' · '}
-                          {x.price_per_100g}
+                          {item.price_per_100g}
                           {' บาท / 100 กรัม'}
                         </p>
 
                         <p>
                           น้ำหนัก:
                           {' '}
-                          {(x.weight_options || []).join(', ')}
+                          {(
+                            item.weight_options || []
+                          ).join(', ')}
                           {' กรัม'}
                         </p>
 
-                        <p>
-                          {x.is_available
-                            ? 'เปิดขาย'
-                            : 'ปิดขาย'}
+                        <p
+                          style={{
+                            color:
+                              item.is_available === false
+                                ? '#c62828'
+                                : 'inherit'
+                          }}
+                        >
+                          {item.is_available === false
+                            ? 'สินค้าหมด'
+                            : 'เปิดขาย'}
                         </p>
 
                         <button
-                          onClick={() => editIngredient(x)}
+                          onClick={() =>
+                            editIngredient(item)
+                          }
                         >
                           แก้ไข
                         </button>
 
                         <button
                           disabled={saving}
-                          onClick={() => toggleIngredient(x)}
+                          onClick={() =>
+                            toggleIngredient(item)
+                          }
                         >
-                          {x.is_available
-                            ? 'ปิดขาย'
-                            : 'เปิดขาย'}
+                          {item.is_available === false
+                            ? 'เปิดขายอีกครั้ง'
+                            : 'ปิดขาย / สินค้าหมด'}
                         </button>
                       </article>
                     ))}
@@ -870,9 +1166,13 @@ function App() {
         )}
       </main>
 
-      <footer>หม่าล่าทั่ง · Mala Tang</footer>
+      <footer>
+        หม่าล่าทั่ง · Mala Tang
+      </footer>
     </>
   );
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(
+  document.getElementById('root')
+).render(<App />);
