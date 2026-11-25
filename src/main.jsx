@@ -844,8 +844,8 @@ function App() {
               const payLabels={pending:'รอชำระเงิน',reviewing:'รอตรวจสอบสลิป',paid:'ชำระเงินเรียบร้อยแล้ว',rejected:'สลิปไม่ผ่านการตรวจสอบ'};
               return <section key={h.id} className="panel" style={{marginTop:16}}>
                 <h3>{o.order_number}</h3><h2>{money(o.total_amount)} บาท</h2>
-                <p>{({cash:'เงินสดที่ร้าน',promptpay:'PromptPay',cod:'ชำระเงินปลายทาง'})[o.payment_method]||o.payment_method} · {payLabels[o.payment_status]||o.payment_status}</p>
-                {o.payment_method==='cod' && o.cod_payment_type==='promptpay' && (delivery?status==='arrived':status==='ready') && ['pending','rejected'].includes(o.payment_status) && <button disabled={codBusy||!!pending||!!payment} onClick={()=>payCod(h,o.payment_status==='rejected')}>{o.payment_status==='rejected'?'ส่งสลิปใหม่':'ชำระเงิน PromptPay QR'}</button>}
+                <p>{({cash:'ชำระเงินสดที่ร้าน',promptpay:'ชำระผ่าน QR Code',cod:o.cod_payment_type==='promptpay'?'ชำระผ่าน QR Code ปลายทาง':'ชำระเงินสดปลายทาง'})[o.payment_method]||o.payment_method} · {payLabels[o.payment_status]||o.payment_status}</p>
+                {o.payment_method==='cod' && o.cod_payment_type==='promptpay' && (delivery?status==='arrived':status==='ready') && ['pending','rejected'].includes(o.payment_status) && <button disabled={codBusy||!!pending||!!payment} onClick={()=>payCod(h,o.payment_status==='rejected')}>{o.payment_status==='rejected'?'ส่งสลิปใหม่':'ชำระผ่าน QR Code ปลายทาง'}</button>}
                 {index<0?<p>สถานะ: {status==='cancelled'?'ยกเลิกแล้ว':status}</p>:steps.map(([key,label],i)=>{
                   const done=i<index||status==='completed';
                   return <p key={key} style={{color:done?'#15803d':i===index?'#b50920':'#6b7280',fontWeight:i===index||done?700:400}}>{done?'✓':i===index?'●':'○'} {label}</p>;
@@ -1107,8 +1107,8 @@ function App() {
               <button disabled={invalidSauces || !cart.length || cart.length>40 || bowls.length>=9 || (method==='soup'&&!soup)} onClick={addBowl}>+ เพิ่มถ้วยถัดไป</button>
               <h3>เลือกรับอาหาร</h3><div className="choices">{[['pickup','รับที่ร้าน'],['delivery','จัดส่ง']].map(([v,l])=><button key={v} className={fulfillment===v?'active':''} onClick={()=>{setFulfillment(v);if(v==='delivery'&&paymentMethod==='cash')setPaymentMethod('cod');}}>{l}</button>)}</div>
                <h3>เลือกวิธีชำระเงิน</h3>
-              <div className="choices"><button disabled={fulfillment==='delivery'} className={paymentMethod==='cash'?'active':''} onClick={()=>setPaymentMethod('cash')}>เงินสดที่ร้าน</button><button className={paymentMethod==='promptpay'?'active':''} onClick={()=>setPaymentMethod('promptpay')}>PromptPay QR</button><button className={paymentMethod==='cod'?'active':''} onClick={()=>setPaymentMethod('cod')}>ชำระเงินปลายทาง</button></div>
-               {paymentMethod==='cod'&&<div className="choices">{[['cash','เงินสดปลายทาง'],['promptpay','QR ปลายทาง']].map(([v,l])=><button key={v} className={codType===v?'active':''} onClick={()=>setCodType(v)}>{l}</button>)}</div>}
+              <div className="choices"><button disabled={fulfillment==='delivery'} className={paymentMethod==='cash'?'active':''} onClick={()=>setPaymentMethod('cash')}>ชำระเงินสดที่ร้าน</button><button className={paymentMethod==='promptpay'?'active':''} onClick={()=>setPaymentMethod('promptpay')}>ชำระผ่าน QR Code</button><button className={paymentMethod==='cod'?'active':''} onClick={()=>setPaymentMethod('cod')}>ชำระเงินปลายทาง</button></div>
+               {paymentMethod==='cod'&&<div className="choices">{[['cash','ชำระเงินสดปลายทาง'],['promptpay','ชำระผ่าน QR Code ปลายทาง']].map(([v,l])=><button key={v} className={codType===v?'active':''} onClick={()=>setCodType(v)}>{l}</button>)}</div>}
               <button
                 className="primary"
                 disabled={invalidSauces||(!cart.length&&!bowls.length)||cart.length>40||(!cart.length&&sauceCups.length>0)||(cart.length>0&&method==='soup'&&!soup)||submitting||!!pending}
@@ -1133,7 +1133,7 @@ function App() {
               </div>
               {payment.payment_status==='pending' ? <>
                 <div style={{textAlign:'center',padding:'16px 0 8px'}}>
-                  <h3 style={{margin:'0 0 12px'}}>PromptPay QR</h3>
+                  <h3 style={{margin:'0 0 12px'}}>ชำระผ่าน QR Code</h3>
                   <div style={{color:'#666',fontSize:13,marginBottom:10}}>ระบบทดสอบ: ยังไม่ต้องโอนเงินจริง</div>
                   {qr && <img src={qr} alt="PromptPay QR" style={{width:420,height:'auto',maxWidth:'100%',display:'block',margin:'auto',borderRadius:8,border:'1px solid #ddd',boxSizing:'border-box',background:'#fff'}}/>}
                   {!qr && <p>กำลังเตรียม QR Code หากไม่แสดง กรุณาตรวจสอบสถานะออเดอร์</p>}
@@ -1285,7 +1285,7 @@ function App() {
                           {order.spice_level}
                         </p>
 
-                        <p>การรับอาหาร: {order.fulfillment_type==='delivery'?'จัดส่ง':'รับที่ร้าน'} {order.payment_method==='cod'?' · '+(order.cod_payment_type==='promptpay'?'QR ปลายทาง':'เงินสดปลายทาง'):''}</p>
+                        <p>การรับอาหาร: {order.fulfillment_type==='delivery'?'จัดส่ง':'รับที่ร้าน'} {order.payment_method==='cod'?' · '+(order.cod_payment_type==='promptpay'?'ชำระผ่าน QR Code ปลายทาง':'ชำระเงินสดปลายทาง'):''}</p>
                         {(order.order_bowls||[]).slice().sort((a,b)=>a.bowl_number-b.bowl_number).map(b=><section className="panel" key={b.id}><b>ถ้วยที่ {b.bowl_number} · {b.cooking_method==='dry'?'แบบแห้ง':b.soup_name} · {b.spice_level}</b>{(order.order_items||[]).filter(i=>i.bowl_id===b.id).map(i=><p key={i.id}>{i.ingredient_name} · {i.weight_grams} กรัม · {money(i.price)} บาท</p>)}{(order.order_sauces||[]).filter(c=>c.bowl_id===b.id).map(c=><p key={c.id}>น้ำจิ้ม {c.cup_number}: {c.sauce_name} {Array.isArray(c.ingredients)?c.ingredients.map(p=>`${p.name||p.ingredient_name||'ส่วนผสม'} ${p.spoons} ช้อน`).join(', '):''} · {money(c.price)} บาท</p>)}</section>)}
                         <h3>รายการสินค้า</h3>
 
@@ -1331,7 +1331,7 @@ function App() {
                           {' กรัม'}
                         </p>
 
-                        <p>วิธีชำระเงิน: {({cash:'เงินสดที่ร้าน',promptpay:'PromptPay QR',cod:'ชำระเงินปลายทาง'})[order.payment_method] || order.payment_method || '-'}</p>
+                        <p>วิธีชำระเงิน: {({cash:'ชำระเงินสดที่ร้าน',promptpay:'ชำระผ่าน QR Code',cod:order.cod_payment_type==='promptpay'?'ชำระผ่าน QR Code ปลายทาง':'ชำระเงินสดปลายทาง'})[order.payment_method] || order.payment_method || '-'}</p>
                         <p>การชำระเงิน: {({pending:'รอชำระเงิน',reviewing:'รอตรวจสอบสลิป',paid:'ชำระแล้ว',rejected:'ปฏิเสธสลิป'})[order.payment_status] || order.payment_status}</p>
                         <p>สถานะออเดอร์: {({pending:'รอดำเนินการ',preparing:'กำลังทำอาหาร',ready:'อาหารพร้อมส่งมอบ',delivering:'กำลังนำส่ง',arrived:'อาหารมาถึงแล้ว',completed:'เสร็จสิ้น'})[order.order_status] || order.order_status}</p>
                         <div className="choices">
