@@ -75,6 +75,10 @@ function App() {
   }
 
   const [page, setPage] = useState('shop');
+  const paymentPanel = React.useRef(null);
+  useEffect(() => {
+    if (page === 'shop' && payment) paymentPanel.current?.scrollIntoView({behavior:'smooth',block:'start'});
+  }, [page, payment?.order_id, payment?.payment_status, qr]);
   const [ingredients, setIngredients] = useState([]);
   const [soups, setSoups] = useState([]);
   const [sauceSettings, setSauceSettings] = useState(defaultSauceSettings);
@@ -736,18 +740,6 @@ function App() {
           </section>
         ) : page === 'shop' ? (
           <>
-            {payment && <section className="panel">
-              <h2>ออเดอร์ {payment.order_number}</h2>
-              <h3>ยอดชำระทั้งหมด {money(payment.total_amount)} บาท</h3>
-              {payment.payment_status==='pending' ? <>
-                <p>ระบบทดสอบ: ยังไม่ต้องโอนเงินจริง</p>
-                {qr && <img src={qr} alt="PromptPay QR" style={{width:280,maxWidth:'100%',display:'block',margin:'auto'}}/>}
-                <p>ตรวจสอบชื่อผู้รับและยอดเงินในแอปธนาคารก่อนโอน</p>
-                <label>แนบรูปสลิป<input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploading||submitting} onChange={e=>setSlip(e.target.files?.[0]||null)}/></label>
-                <button className="primary" disabled={!slip||!qr||uploading||submitting} onClick={uploadSlip}>{uploading?'กำลังส่งสลิป...':'ส่งสลิป'}</button>
-                <button disabled={uploading||submitting||!pending} onClick={submitOrder}>ตรวจสอบสถานะออเดอร์</button>
-              </> : <><p>{payment.payment_status==='reviewing'?'ส่งสลิปแล้ว รอร้านตรวจสอบ':payment.payment_status==='paid'?'ชำระเงินแล้ว':'สถานะ: '+payment.payment_status}</p><button onClick={()=>{setPayment(null);setSlip(null);}}>กลับหน้าสั่งอาหาร</button></>}
-            </section>}
             {pending && !payment && <section className="panel"><p>มีคำขอเดิมที่ยังไม่ได้รับการยืนยัน กรุณาส่งซ้ำก่อนสั่งใหม่</p><button disabled={submitting} onClick={submitOrder}>ส่งคำขอเดิมอีกครั้ง</button></section>}
             <fieldset disabled={!!pending || submitting || !!payment} style={{border:0,padding:0,minWidth:0}}>
             <h2>ถ้วยที่ {bowls.length+1} · เลือกวัตถุดิบ</h2>
@@ -1036,6 +1028,21 @@ function App() {
               </p>
             </section>
             </fieldset>
+            {payment && <section className="panel" ref={paymentPanel} style={{scrollMarginTop:24,textAlign:"center"}}>
+              <h2>ออเดอร์ {payment.order_number}</h2>
+              <h3>ยอดชำระทั้งหมด</h3><h2 style={{color:"#b50920",fontSize:32}}>{money(payment.total_amount)} บาท</h2>
+              {payment.payment_status==='pending' ? <>
+                <p>ระบบทดสอบ: ยังไม่ต้องโอนเงินจริง</p>
+                {qr && <img src={qr} alt="PromptPay QR" style={{width:280,maxWidth:'100%',display:'block',margin:'auto'}}/>}
+                {qr && <p><a href={qr} download={`PromptPay-${payment.order_number}.png`}>บันทึกรูป QR Code</a></p>}
+                {!qr && <p>กำลังเตรียม QR Code หากไม่แสดง กรุณาตรวจสอบสถานะออเดอร์</p>}
+                <p>ตรวจสอบชื่อผู้รับและยอดเงินในแอปธนาคารก่อนโอน</p>
+                <label>แนบรูปสลิป<input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploading||submitting} onChange={e=>setSlip(e.target.files?.[0]||null)}/></label>
+                <button className="primary" disabled={!slip||!qr||uploading||submitting} onClick={uploadSlip}>{uploading?'กำลังส่งสลิป...':'ส่งหลักฐานการชำระเงิน'}</button>
+                <button disabled={uploading||submitting||!pending} onClick={submitOrder}>ตรวจสอบสถานะออเดอร์</button>
+              </> : <><p>{payment.payment_status==='reviewing'?'ส่งสลิปแล้ว รอร้านตรวจสอบ':payment.payment_status==='paid'?'ชำระเงินแล้ว':'สถานะ: '+payment.payment_status}</p><button onClick={()=>{setPayment(null);setSlip(null);}}>กลับหน้าสั่งอาหาร</button></>}
+            </section>}
+
           </>
         ) : (
           <>
