@@ -279,7 +279,8 @@ function App() {
   const availableSauceIngredients = sauceIngredients.filter(x => x.is_available !== false);
   const maxCups = Math.min(20, Math.max(0, Number(sauceSettings.max_cups) || 0));
 
-  function priceSauceCup(cup, index) {
+  function priceSauceCup(cup, index, offset = bowls.reduce((n,b)=>n+b.payload.sauces.length,0)) {
+    if (Array.isArray(sauceSettings.cup_prices)) return Number(sauceSettings.cup_prices[offset+index] || 0);
     let price = 0;
     if (cup.type === 'recipe') {
       const recipe = sauceRecipes.find(x => String(x.id) === String(cup.recipe_id));
@@ -291,7 +292,7 @@ function App() {
         price += Number(ingredient?.price_per_spoon || 0) * Number(part.spoons);
       }
     }
-    if (index === 0 && !bowls.some(b => b.payload.sauces.length)) {
+    if (index + offset === 0) {
       const mode = sauceSettings.free_cup_mode;
       if (mode === 'full_cup' || (mode === 'recipe_only' && cup.type === 'recipe')) return 0;
       if (mode === 'base_only' && cup.type === 'custom') {
@@ -303,7 +304,23 @@ function App() {
 
   const sauceTotal = sauceCups.reduce((sum, cup, index) => sum + priceSauceCup(cup, index), 0);
   const savedWeight = bowls.reduce((n,b) => n+b.weight,0);
-  const savedPrice = bowls.reduce((n,b) => n+b.price,0);
+  let cupOffset=0;
+  const bowlPrices=bowls.map(b=>{const offset=cupOffset;cupOffset+=b.payload.sauces.length;return b.foodPrice+b.payload.sauces.reduce((n,c,i)=>n+priceSauceCup(c,i,offset),0);});
+  const savedPrice = bowlPrices.reduce((n,p)=>n+p,0);
+  function validCup(c) {
+    if (!sauceEnabled) return false;
+    if(c.type==='recipe') return availableRecipes.some(x=>String(x.id)===String(c.recipe_id));
+    if(c.type!=='custom') return false;
+    const parts=c.ingredients||[], total=parts.reduce((n,p)=>n+Number(p.spoons),0);
+    return parts.length>0 && parts.length<=Number(sauceSettings.max_ingredient_types) && total>=Number(sauceSettings.min_spoons) && total<=Number(sauceSettings.cup_capacity) && parts.every(p=>availableSauceIngredients.some(x=>String(x.id)===String(p.ingredient_id)&&Number(p.spoons)>0&&Number(p.spoons)<=Number(x.max_spoons)));
+  }
+  const invalidSauces=[...bowls.flatMap(b=>b.payload.sauces),...sauceCups].some(c=>!validCup(c)) || cupOffset+sauceCups.length>maxCups;
+  function updateCup(key,patch){setSauceCups(old=>old.map(c=>c.key===key?{...c,...patch}:c));}
+  function changeSpoons(c,item,delta){
+    const parts=c.ingredients||[], count=Number(parts.find(p=>String(p.ingredient_id)===String(item.id))?.spoons||0), next=count+delta;
+    if(next<0 || (delta>0 && (item.is_available===false || next>Number(item.max_spoons) || parts.reduce((n,p)=>n+Number(p.spoons),0)+delta>Number(sauceSettings.cup_capacity) || (!count&&parts.length>=Number(sauceSettings.max_ingredient_types)))))return;
+    updateCup(c.key,{ingredients:[...parts.filter(p=>String(p.ingredient_id)!==String(item.id)),...(next>0?[{ingredient_id:item.id,spoons:next}]:[])]});
+  }
   const grandTotal = savedPrice + totalPrice + sauceTotal;
   function currentBowl() {
     return { cooking_method: method, ...(method === 'soup' ? {soup_name:soup} : {}), spice_level:spice,
@@ -311,8 +328,8 @@ function App() {
       sauces:sauceCups.map(c=>c.type==='recipe'?{type:'recipe',recipe_id:c.recipe_id}:{type:'custom',ingredients:c.ingredients}) };
   }
   function addBowl() {
-    if (!cart.length || cart.length>40 || (method==='soup'&&!soup) || bowls.length>=9) return;
-    setBowls(old=>[...old,{key:crypto.randomUUID(),payload:currentBowl(),weight:totalWeight,price:totalPrice+sauceTotal}]);
+    if (invalidSauces || !cart.length || cart.length>40 || (method==='soup'&&!soup) || bowls.length>=9) return;
+    setBowls(old=>[...old,{key:crypto.randomUUID(),payload:currentBowl(),weight:totalWeight,foodPrice:totalPrice,price:totalPrice+sauceTotal}]);
     setCart([]); setSauceCups([]); setMixSpoons({});
   }
 
@@ -341,7 +358,8 @@ function App() {
   }
 
   function sauceCupLabel(cup) {
-    if (cup.type === 'recipe') return cup.name;
+    if (!cup.type) return 'ยังไม่ได้เลือก';
+    if (cup.type === 'recipe') return cup.name || 'ยังไม่ได้เลือกสูตร';
     return 'ผสมเอง: ' + (cup.ingredients || []).map(part => {
       const item = sauceIngredients.find(x => String(x.id) === String(part.ingredient_id));
       return `${item?.name || 'ส่วนผสม'} ${part.spoons} ช้อน`;
@@ -484,7 +502,7 @@ function App() {
 
   async function submitOrder() {
     if (!db || submitLock.current) return;
-    if (!pending && ((!cart.length && !bowls.length) || cart.length>40 || (cart.length && method==='soup'&&!soup) || (!cart.length && sauceCups.length))) return;
+    if (!pending && (invalidSauces || (!cart.length && !bowls.length) || cart.length>40 || (cart.length && method==='soup'&&!soup) || (!cart.length && sauceCups.length))) return;
     submitLock.current=true; setSubmitting(true);
     try {
       const payload = pending || {
@@ -982,36 +1000,15 @@ function App() {
                 <h2>④ เลือกน้ำจิ้ม</h2>
                 <p className="sub">เลือกได้สูงสุด {maxCups} ถ้วย · ถ้วยละไม่เกิน {sauceSettings.cup_capacity} ช้อน</p>
                 {sauceError && <p style={{ color: '#c62828' }}>{sauceError}</p>}
-                <h3>น้ำจิ้มสูตรร้าน</h3>
-                {availableRecipes.length ? (
-                  <div>
-                    <select value={recipeChoice || availableRecipes[0]?.id || ''} onChange={e => setRecipeChoice(e.target.value)}>
-                      {availableRecipes.map(item => <option key={item.id} value={item.id}>{item.name} · {money(item.price)} บาท</option>)}
-                    </select>
-                    {availableRecipes.find(x => String(x.id) === String(recipeChoice || availableRecipes[0]?.id))?.description && (
-                      <p className="sub">{availableRecipes.find(x => String(x.id) === String(recipeChoice || availableRecipes[0]?.id)).description}</p>
-                    )}
-                    <button className="primary" disabled={sauceCups.length + bowls.reduce((n,b)=>n+b.payload.sauces.length,0) >= maxCups} onClick={addRecipeCup}>+ เพิ่มน้ำจิ้มสูตรร้าน</button>
-                  </div>
-                ) : <p>ยังไม่มีน้ำจิ้มสูตรร้านที่เปิดขาย</p>}
-                <h3>น้ำจิ้มผสมเอง</h3>
-                {availableSauceIngredients.length ? (
-                  <>
-                    {availableSauceIngredients.map(item => (
-                      <div className="line" key={item.id}>
-                        <span>{item.name} · {money(item.price_per_spoon)} บาท/ช้อน {item.description ? `(${item.description})` : ''}</span>
-                        <label>ช้อน{' '}
-                          <input type="number" min="0" max={item.max_spoons} step="0.5" style={{ width: 85 }}
-                            value={mixSpoons[item.id] ?? 0}
-                            onChange={e => setMixSpoons(old => ({ ...old, [item.id]: e.target.value }))} />
-                        </label>
-                      </div>
-                    ))}
-                    <p className="sub">รวม {Object.values(mixSpoons).reduce((sum, x) => sum + (Number(x) || 0), 0)} ช้อน · ขั้นต่ำ {sauceSettings.min_spoons} ช้อน · สูงสุด {sauceSettings.max_ingredient_types} ชนิด</p>
-                    <button className="primary" disabled={sauceCups.length + bowls.reduce((n,b)=>n+b.payload.sauces.length,0) >= maxCups} onClick={addCustomCup}>+ เพิ่มน้ำจิ้มผสมเอง</button>
-                  </>
-                ) : <p>ยังไม่มีส่วนผสมน้ำจิ้มที่เปิดขาย</p>}
-                <p className="sub">ราคาเบสผสมเอง {money(sauceSettings.custom_cup_price)} บาท/ถ้วย · ราคาจริงคำนวณใหม่เมื่อยืนยันออเดอร์</p>
+                <button className="primary" disabled={cupOffset+sauceCups.length>=maxCups} onClick={()=>setSauceCups(old=>[...old,{key:crypto.randomUUID(),type:'',ingredients:[]}])}>＋ เพิ่มถ้วยน้ำจิ้ม</button>
+                {sauceCups.map((c,i)=><div className="panel" key={c.key}>
+                  <div className="line"><b>น้ำจิ้มถ้วยที่ {cupOffset+i+1}</b><b>{money(priceSauceCup(c,i))} บาท</b><button onClick={()=>setSauceCups(old=>old.filter(x=>x.key!==c.key))}>ลบ</button></div>
+                  <div className="choices">{[['recipe','สูตรร้าน'],['custom','ผสมเอง']].map(([type,label])=><button key={type} className={c.type===type?'active':''} onClick={()=>{if(c.type!==type)updateCup(c.key,{type,recipe_id:null,name:'',ingredients:[]});}}>{label}</button>)}</div>
+                  {c.type==='recipe' && sauceRecipes.map(item=><label key={item.id} style={{display:'block',opacity:item.is_available===false?.6:1}}><input type="radio" name={'recipe-'+c.key} disabled={item.is_available===false} checked={String(c.recipe_id)===String(item.id)} onChange={()=>updateCup(c.key,{recipe_id:item.id,name:item.name})}/> {item.name} {item.is_available===false?' · สินค้าหมด':''} {item.description||''}</label>)}
+                  {c.type==='custom' && <>{sauceIngredients.map(item=>{const count=Number(c.ingredients?.find(p=>String(p.ingredient_id)===String(item.id))?.spoons||0);return <div className="line" key={item.id}><span>{item.name} {item.is_available===false?' · สินค้าหมด':''}</span><div><button disabled={!count} onClick={()=>changeSpoons(c,item,-1)}>−</button> {count} ช้อน <button disabled={item.is_available===false||count>=Number(item.max_spoons)} onClick={()=>changeSpoons(c,item,1)}>+</button></div></div>;})}<p>รวม {(c.ingredients||[]).reduce((n,p)=>n+Number(p.spoons),0)} / {sauceSettings.cup_capacity} ช้อน</p></>}
+                  {!validCup(c)&&<p className="sub">กรุณาเลือกน้ำจิ้มให้ครบ หรือลบถ้วยนี้</p>}
+                </div>)}
+                <p className="sub">ไม่รับน้ำจิ้ม สามารถข้ามได้ · ราคาจริงคำนวณใหม่เมื่อยืนยันออเดอร์</p>
               </section>
             )}
 
@@ -1086,13 +1083,13 @@ function App() {
                 </strong>
               </div>
 
-              {bowls.map((b,i)=><div className="line" key={b.key}><span>ถ้วยที่ {i+1} · {b.weight} กรัม · {money(b.price)} บาท</span><button onClick={()=>setBowls(old=>old.filter(x=>x.key!==b.key))}>ลบถ้วย</button></div>)}
-              <button disabled={!cart.length || cart.length>40 || bowls.length>=9 || (method==='soup'&&!soup)} onClick={addBowl}>+ เพิ่มถ้วยถัดไป</button>
+              {bowls.map((b,i)=><div className="line" key={b.key}><span>ถ้วยที่ {i+1} · {b.weight} กรัม · {money(bowlPrices[i])} บาท</span><button onClick={()=>setBowls(old=>old.filter(x=>x.key!==b.key))}>ลบถ้วย</button></div>)}
+              <button disabled={invalidSauces || !cart.length || cart.length>40 || bowls.length>=9 || (method==='soup'&&!soup)} onClick={addBowl}>+ เพิ่มถ้วยถัดไป</button>
               <h3>เลือกวิธีชำระเงิน</h3>
               <div className="choices"><button className={paymentMethod==='cash'?'active':''} onClick={()=>setPaymentMethod('cash')}>เงินสดที่ร้าน</button><button className={paymentMethod==='promptpay'?'active':''} onClick={()=>setPaymentMethod('promptpay')}>PromptPay QR</button><button className={paymentMethod==='cod'?'active':''} onClick={()=>setPaymentMethod('cod')}>ชำระเงินปลายทาง</button></div>
               <button
                 className="primary"
-                disabled={(!cart.length&&!bowls.length)||cart.length>40||(!cart.length&&sauceCups.length>0)||(cart.length>0&&method==='soup'&&!soup)||submitting||!!pending}
+                disabled={invalidSauces||(!cart.length&&!bowls.length)||cart.length>40||(!cart.length&&sauceCups.length>0)||(cart.length>0&&method==='soup'&&!soup)||submitting||!!pending}
                 onClick={submitOrder}
               >
                 {submitting
