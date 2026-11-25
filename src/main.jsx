@@ -470,7 +470,7 @@ function App() {
       }
       sessionStorage.removeItem('mala-v5-pending'); setPending(null);
       setCart([]); setBowls([]); setSauceCups([]);
-      setNotice('รับออเดอร์ '+data.order_number+' ยอดชำระทั้งหมด '+money(data.total_amount)+' บาท กรุณาชำระเงินสดที่ร้าน');
+      setNotice('รับออเดอร์ '+data.order_number+' ยอดชำระทั้งหมด '+money(data.total_amount)+' บาท '+(data.payment_method==='cod'?'ชำระเงินปลายทางเมื่อได้รับอาหาร':'กรุณาชำระเงินสดที่ร้าน'));
     } catch(e) { setNotice(e.message); }
     finally { submitLock.current=false; setSubmitting(false); }
   }
@@ -1013,7 +1013,7 @@ function App() {
               {bowls.map((b,i)=><div className="line" key={b.key}><span>ถ้วยที่ {i+1} · {b.weight} กรัม · {money(b.price)} บาท</span><button onClick={()=>setBowls(old=>old.filter(x=>x.key!==b.key))}>ลบถ้วย</button></div>)}
               <button disabled={!cart.length || cart.length>40 || bowls.length>=9 || (method==='soup'&&!soup)} onClick={addBowl}>+ เพิ่มถ้วยถัดไป</button>
               <h3>เลือกวิธีชำระเงิน</h3>
-              <div className="choices"><button className={paymentMethod==='cash'?'active':''} onClick={()=>setPaymentMethod('cash')}>เงินสดที่ร้าน</button><button className={paymentMethod==='promptpay'?'active':''} onClick={()=>setPaymentMethod('promptpay')}>PromptPay QR</button></div>
+              <div className="choices"><button className={paymentMethod==='cash'?'active':''} onClick={()=>setPaymentMethod('cash')}>เงินสดที่ร้าน</button><button className={paymentMethod==='promptpay'?'active':''} onClick={()=>setPaymentMethod('promptpay')}>PromptPay QR</button><button className={paymentMethod==='cod'?'active':''} onClick={()=>setPaymentMethod('cod')}>ชำระเงินปลายทาง</button></div>
               <button
                 className="primary"
                 disabled={(!cart.length&&!bowls.length)||cart.length>40||(!cart.length&&sauceCups.length>0)||(cart.length>0&&method==='soup'&&!soup)||submitting||!!pending}
