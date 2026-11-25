@@ -44,6 +44,12 @@ function App() {
   const [sauceForm, setSauceForm] = useState({ ...newSauceRecipe });
   const [selectedWeights, setSelectedWeights] = useState({});
   const [cart, setCart] = useState([]);
+  const [bowls, setBowls] = useState([]);
+  const [method, setMethod] = useState('soup');
+  const [pending, setPending] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem('mala-v5-pending') || 'null'); } catch { return null; }
+  });
+  const submitLock = React.useRef(false);
   const [soup, setSoup] = useState('');
   const [spice, setSpice] = useState('เผ็ดกลาง');
   const [session, setSession] = useState(null);
@@ -200,7 +206,7 @@ function App() {
         price += Number(ingredient?.price_per_spoon || 0) * Number(part.spoons);
       }
     }
-    if (index === 0) {
+    if (index === 0 && !bowls.some(b => b.payload.sauces.length)) {
       const mode = sauceSettings.free_cup_mode;
       if (mode === 'full_cup' || (mode === 'recipe_only' && cup.type === 'recipe')) return 0;
       if (mode === 'base_only' && cup.type === 'custom') {
@@ -211,10 +217,22 @@ function App() {
   }
 
   const sauceTotal = sauceCups.reduce((sum, cup, index) => sum + priceSauceCup(cup, index), 0);
-  const grandTotal = totalPrice + sauceTotal;
+  const savedWeight = bowls.reduce((n,b) => n+b.weight,0);
+  const savedPrice = bowls.reduce((n,b) => n+b.price,0);
+  const grandTotal = savedPrice + totalPrice + sauceTotal;
+  function currentBowl() {
+    return { cooking_method: method, ...(method === 'soup' ? {soup_name:soup} : {}), spice_level:spice,
+      items:cart.map(i=>({ingredient_id:i.ingredientId,weight_grams:i.grams})),
+      sauces:sauceCups.map(c=>c.type==='recipe'?{type:'recipe',recipe_id:c.recipe_id}:{type:'custom',ingredients:c.ingredients}) };
+  }
+  function addBowl() {
+    if (!cart.length || cart.length>40 || (method==='soup'&&!soup) || bowls.length>=9) return;
+    setBowls(old=>[...old,{key:crypto.randomUUID(),payload:currentBowl(),weight:totalWeight,price:totalPrice+sauceTotal}]);
+    setCart([]); setSauceCups([]); setMixSpoons({});
+  }
 
   function addRecipeCup() {
-    if (!sauceEnabled || sauceCups.length >= maxCups) return setNotice('จำนวนถ้วยน้ำจิ้มเต็มแล้ว');
+    if (!sauceEnabled || sauceCups.length + bowls.reduce((n,b)=>n+b.payload.sauces.length,0) >= maxCups) return setNotice('จำนวนถ้วยน้ำจิ้มเต็มแล้ว');
     const recipe = availableRecipes.find(x => String(x.id) === String(recipeChoice || availableRecipes[0]?.id));
     if (!recipe) return setNotice('กรุณาเลือกสูตรน้ำจิ้ม');
     setSauceCups(current => [...current, { key: crypto.randomUUID(), type: 'recipe', recipe_id: recipe.id, name: recipe.name }]);
@@ -222,7 +240,7 @@ function App() {
   }
 
   function addCustomCup() {
-    if (!sauceEnabled || sauceCups.length >= maxCups) return setNotice('จำนวนถ้วยน้ำจิ้มเต็มแล้ว');
+    if (!sauceEnabled || sauceCups.length + bowls.reduce((n,b)=>n+b.payload.sauces.length,0) >= maxCups) return setNotice('จำนวนถ้วยน้ำจิ้มเต็มแล้ว');
     const parts = Object.entries(mixSpoons).filter(([, spoons]) => Number(spoons) > 0).map(([ingredient_id, spoons]) => ({ ingredient_id: Number(ingredient_id), spoons: Number(spoons) }));
     const total = parts.reduce((sum, part) => sum + part.spoons, 0);
     if (!parts.length || total < Number(sauceSettings.min_spoons)) return setNotice('จำนวนช้อนยังไม่ถึงขั้นต่ำ');
@@ -380,82 +398,24 @@ function App() {
   }
 
   async function submitOrder() {
-    if (!db || submitting || !cart.length || !soup) {
-      return;
-    }
-
-    const availableIds = new Set(
-      ingredients
-        .filter(x => x.is_available !== false)
-        .map(x => String(x.id))
-    );
-
-    if (
-      cart.some(item =>
-        !availableIds.has(String(item.ingredientId))
-      )
-    ) {
-      setNotice(
-        'มีสินค้าที่หมดแล้วในตะกร้า กรุณาลบออกก่อน'
-      );
-      return;
-    }
-
-    setSubmitting(true);
-    setNotice('กำลังส่งออเดอร์...');
-
+    if (!db || submitLock.current) return;
+    if (!pending && ((!cart.length && !bowls.length) || cart.length>40 || (cart.length && method==='soup'&&!soup) || (!cart.length && sauceCups.length))) return;
+    submitLock.current=true; setSubmitting(true);
     try {
-      // Keep each selected portion separate: SQL validates weight_options per portion.
-      const items = cart.map(item => ({
-        ingredient_id: item.ingredientId,
-        weight_grams: item.grams
-      }));
-      const sauces = sauceEnabled ? sauceCups.map(cup =>
-        cup.type === 'recipe'
-          ? { type: 'recipe', recipe_id: cup.recipe_id }
-          : { type: 'custom', ingredients: cup.ingredients.map(part => ({
-              ingredient_id: part.ingredient_id, spoons: part.spoons
-            })) }
-      ) : [];
-
-      const { data, error } = await db.functions.invoke(
-        'create-order-v2',
-        {
-          body: {
-            items,
-            sauces,
-            soup_name: soup,
-            spice_level: spice,
-            payment_method: 'cash'
-          }
-        }
-      );
-
-      if (error) throw error;
-
-      if (!data?.success) {
-        throw new Error(
-          data?.error || 'ส่งออเดอร์ไม่สำเร็จ'
-        );
-      }
-
-      setCart([]);
-      setSauceCups([]);
-
-      setNotice(
-        'รับออเดอร์แล้ว เลขที่ ' +
-        data.order_number +
-        ' ยอด ' +
-        Number(data.total_amount).toFixed(2) +
-        ' บาท กรุณาชำระเงินสดที่ร้าน'
-      );
-    } catch (error) {
-      setNotice(
-        'ส่งออเดอร์ไม่สำเร็จ: ' + error.message
-      );
-    } finally {
-      setSubmitting(false);
-    }
+      const payload = pending || {
+        idempotency_key:crypto.randomUUID(),
+        request_token:Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join(''),
+        payment_method:'cash',
+        bowls:[...bowls.map(b=>b.payload),...(cart.length?[currentBowl()]:[])]
+      };
+      sessionStorage.setItem('mala-v5-pending',JSON.stringify(payload)); setPending(payload);
+      const {data,error}=await db.functions.invoke('create-order-v5',{body:payload});
+      if(error || !data?.success) throw new Error('ยังไม่ได้รับการยืนยัน กรุณาลองส่งคำขอเดิมอีกครั้ง');
+      sessionStorage.removeItem('mala-v5-pending'); setPending(null);
+      setCart([]); setBowls([]); setSauceCups([]);
+      setNotice('รับออเดอร์ '+data.order_number+' ยอดชำระทั้งหมด '+money(data.total_amount)+' บาท กรุณาชำระเงินสดที่ร้าน');
+    } catch(e) { setNotice(e.message); }
+    finally { submitLock.current=false; setSubmitting(false); }
   }
 
   async function login(event) {
@@ -723,7 +683,9 @@ function App() {
           </section>
         ) : page === 'shop' ? (
           <>
-            <h2>① เลือกวัตถุดิบ</h2>
+            {pending && <section className="panel"><p>มีคำขอเดิมที่ยังไม่ได้รับการยืนยัน กรุณาส่งซ้ำก่อนสั่งใหม่</p><button disabled={submitting} onClick={submitOrder}>ส่งคำขอเดิมอีกครั้ง</button></section>}
+            <fieldset disabled={!!pending || submitting} style={{border:0,padding:0,minWidth:0}}>
+            <h2>ถ้วยที่ {bowls.length+1} · เลือกวัตถุดิบ</h2>
             <p className="sub">
               เลือกจำนวนกรัม แล้วกดเพิ่มใส่ตะกร้า
             </p>
@@ -842,10 +804,11 @@ function App() {
             )}
 
             <section className="panel">
-              <h2>② เลือกน้ำซุป</h2>
+              <h2>② เลือกแบบน้ำหรือแห้ง</h2>
+              <div className="choices"><button className={method==='soup'?'active':''} onClick={()=>setMethod('soup')}>แบบน้ำ</button><button className={method==='dry'?'active':''} onClick={()=>setMethod('dry')}>แบบแห้ง</button></div>
 
               <div className="choices">
-                {soups.map(item => (
+                {method === 'soup' && soups.map(item => (
                   <button
                     key={item.id}
                     className={
@@ -894,7 +857,7 @@ function App() {
                     {availableRecipes.find(x => String(x.id) === String(recipeChoice || availableRecipes[0]?.id))?.description && (
                       <p className="sub">{availableRecipes.find(x => String(x.id) === String(recipeChoice || availableRecipes[0]?.id)).description}</p>
                     )}
-                    <button className="primary" disabled={sauceCups.length >= maxCups} onClick={addRecipeCup}>+ เพิ่มน้ำจิ้มสูตรร้าน</button>
+                    <button className="primary" disabled={sauceCups.length + bowls.reduce((n,b)=>n+b.payload.sauces.length,0) >= maxCups} onClick={addRecipeCup}>+ เพิ่มน้ำจิ้มสูตรร้าน</button>
                   </div>
                 ) : <p>ยังไม่มีน้ำจิ้มสูตรร้านที่เปิดขาย</p>}
                 <h3>น้ำจิ้มผสมเอง</h3>
@@ -911,7 +874,7 @@ function App() {
                       </div>
                     ))}
                     <p className="sub">รวม {Object.values(mixSpoons).reduce((sum, x) => sum + (Number(x) || 0), 0)} ช้อน · ขั้นต่ำ {sauceSettings.min_spoons} ช้อน · สูงสุด {sauceSettings.max_ingredient_types} ชนิด</p>
-                    <button className="primary" disabled={sauceCups.length >= maxCups} onClick={addCustomCup}>+ เพิ่มน้ำจิ้มผสมเอง</button>
+                    <button className="primary" disabled={sauceCups.length + bowls.reduce((n,b)=>n+b.payload.sauces.length,0) >= maxCups} onClick={addCustomCup}>+ เพิ่มน้ำจิ้มผสมเอง</button>
                   </>
                 ) : <p>ยังไม่มีส่วนผสมน้ำจิ้มที่เปิดขาย</p>}
                 <p className="sub">ราคาเบสผสมเอง {money(sauceSettings.custom_cup_price)} บาท/ถ้วย · ราคาจริงคำนวณใหม่เมื่อยืนยันออเดอร์</p>
@@ -969,7 +932,7 @@ function App() {
               {sauceEnabled && <div className="line"><span>รวมน้ำจิ้ม</span><b>{money(sauceTotal)} บาท</b></div>}
               <div className="line">
                 <span>น้ำซุป</span>
-                <b>{soup || '-'}</b>
+                <b>{method==='dry'?'แบบแห้ง':soup || '-'}</b>
               </div>
 
               <div className="line">
@@ -979,23 +942,21 @@ function App() {
 
               <div className="line">
                 <strong>น้ำหนักรวม</strong>
-                <strong>{totalWeight} กรัม</strong>
+                <strong>{savedWeight+totalWeight} กรัม</strong>
               </div>
 
               <div className="line">
-                <strong>ยอดรวม</strong>
+                <strong>ยอดชำระทั้งหมด (ประมาณการ)</strong>
                 <strong>
                   {money(grandTotal)} บาท
                 </strong>
               </div>
 
+              {bowls.map((b,i)=><div className="line" key={b.key}><span>ถ้วยที่ {i+1} · {b.weight} กรัม · {money(b.price)} บาท</span><button onClick={()=>setBowls(old=>old.filter(x=>x.key!==b.key))}>ลบถ้วย</button></div>)}
+              <button disabled={!cart.length || cart.length>40 || bowls.length>=9 || (method==='soup'&&!soup)} onClick={addBowl}>+ เพิ่มถ้วยถัดไป</button>
               <button
                 className="primary"
-                disabled={
-                  !cart.length ||
-                  submitting ||
-                  !soup
-                }
+                disabled={(!cart.length&&!bowls.length)||cart.length>40||(!cart.length&&sauceCups.length>0)||(cart.length>0&&method==='soup'&&!soup)||submitting||!!pending}
                 onClick={submitOrder}
               >
                 {submitting
@@ -1008,6 +969,7 @@ function App() {
                 ยังไม่เปิดรับชำระเงินออนไลน์
               </p>
             </section>
+            </fieldset>
           </>
         ) : (
           <>
