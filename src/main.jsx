@@ -281,6 +281,7 @@ function App() {
 
   function priceSauceCup(cup, index, offset = bowls.reduce((n,b)=>n+b.payload.sauces.length,0)) {
     if (Array.isArray(sauceSettings.cup_prices)) return Number(sauceSettings.cup_prices[offset+index] || 0);
+    if (Array.isArray(sauceSettings.cup_prices)) return Number(sauceSettings.cup_prices[offset+index] || 0);
     let price = 0;
     if (cup.type === 'recipe') {
       const recipe = sauceRecipes.find(x => String(x.id) === String(cup.recipe_id));
@@ -370,15 +371,18 @@ function App() {
     event.preventDefault();
     if (!isAdmin || saving || !db) return;
     const s = sauceSettings;
+    if (!owner) return;
+    if (Array.isArray(s.cup_prices) && !window.confirm("การเปิดใช้ราคาใหม่มีผลกับฐานข้อมูลเว็บไซต์หลักด้วย ยืนยันเฉพาะเมื่อเว็บไซต์หลักรองรับแล้ว?")) return;
     const payload = {
       id: 1, is_enabled: Boolean(s.is_enabled),
+      cup_prices: Array.isArray(s.cup_prices) ? s.cup_prices.map(Number) : null,
       max_cups: Number(s.max_cups), cup_capacity: Number(s.cup_capacity),
       min_spoons: Number(s.min_spoons), max_ingredient_types: Number(s.max_ingredient_types),
       custom_cup_price: Number(s.custom_cup_price),
       first_cup_free: Boolean(s.first_cup_free), free_cup_mode: s.free_cup_mode
     };
-    if (!Number.isInteger(payload.max_cups) || payload.max_cups < 0 ||
-        !Number.isFinite(payload.cup_capacity) || payload.cup_capacity <= 0 ||
+    if ((payload.cup_prices !== null && (payload.max_cups < 1 || payload.max_cups > 10 || payload.cup_prices.length !== payload.max_cups || s.cup_prices.some(x=>String(x).trim()==='' || !Number.isFinite(Number(x)) || Number(x)<0 || Math.abs(Number(x)*100-Math.round(Number(x)*100))>0.000001))) || !Number.isInteger(payload.max_cups) || payload.max_cups < 0 || payload.max_cups > 10 ||
+        !Number.isFinite(payload.cup_capacity) || payload.cup_capacity <= 0 || payload.cup_capacity > 20 ||
         !Number.isFinite(payload.min_spoons) || payload.min_spoons < 0 || payload.min_spoons > payload.cup_capacity ||
         !Number.isInteger(payload.max_ingredient_types) || payload.max_ingredient_types < 1 ||
         !Number.isFinite(payload.custom_cup_price) || payload.custom_cup_price < 0) {
@@ -1337,22 +1341,23 @@ function App() {
                         ['cup_capacity', 'ความจุถ้วย (ช้อน)', 0.5],
                         ['min_spoons', 'จำนวนช้อนขั้นต่ำ', 0.5],
                         ['max_ingredient_types', 'ชนิดส่วนผสมสูงสุด', 1],
-                        ['custom_cup_price', 'ราคาเบสผสมเอง (บาท)', 0.01]
+                        ...(Array.isArray(sauceSettings.cup_prices) ? [] : [['custom_cup_price', 'ราคาเบสผสมเอง (บาท)', 0.01]])
                       ].map(([field, label, step]) => (
-                        <label key={field}>{label}
+                        <label key={field} style={{display:'block',margin:'12px 0'}}>{label}
                           <input type="number" min="0" step={step} value={sauceSettings[field]}
-                            onChange={e => setSauceSettings(old => ({ ...old, [field]: e.target.value }))} required />
+                            onChange={e => setSauceSettings(old => ({ ...old, [field]: e.target.value, ...(field==='max_cups' && Array.isArray(old.cup_prices) ? {cup_prices:Array.from({length:Math.min(10,Math.max(0,Number(e.target.value)||0))},(_,i)=>old.cup_prices[i]??'')} : {}) }))} required />
                         </label>
                       ))}
-                      <label>โหมดถ้วยแรกฟรี
+                      <label style={{display:'block',margin:'12px 0'}}><input type="checkbox" checked={Array.isArray(sauceSettings.cup_prices)} onChange={e=>setSauceSettings(old=>({...old,cup_prices:e.target.checked?Array.from({length:Math.min(10,Math.max(1,Number(old.max_cups)||1))},()=>''):null}))}/> กำหนดราคารายถ้วย</label>
+                      {Array.isArray(sauceSettings.cup_prices) ? <><p>ราคาเดียวกันทั้งสูตรร้านและผสมเอง · 0 บาท = ฟรี</p>{sauceSettings.cup_prices.map((p,i)=><label key={i} style={{display:'block',margin:'10px 0'}}>ถ้วยที่ {i+1} <input type="number" min="0" step="0.01" required value={p} onChange={e=>setSauceSettings(old=>({...old,cup_prices:old.cup_prices.map((v,j)=>j===i?e.target.value:v)}))}/> บาท</label>)}</> : <label>โหมดถ้วยแรกฟรี
                         <select value={sauceSettings.free_cup_mode} onChange={e => setSauceSettings(old => ({ ...old, free_cup_mode: e.target.value }))}>
                           <option value="none">ไม่ฟรี</option>
                           <option value="full_cup">ฟรีทั้งถ้วยแรก</option>
                           <option value="base_only">ฟรีเฉพาะราคาเบสผสมเองถ้วยแรก</option>
                           <option value="recipe_only">ฟรีถ้วยแรกเฉพาะสูตรร้าน</option>
                         </select>
-                      </label>
-                      <button type="submit" className="primary" disabled={saving}>บันทึกการตั้งค่า</button>
+                      </label>}
+                      <button type="submit" className="primary" disabled={saving || !owner}>บันทึกการตั้งค่า</button>
                     </form>
                     <div className="choices">
                       <button className={sauceEditor === 'recipes' ? 'active' : ''} onClick={() => beginSauceEdit('recipes')}>สูตรน้ำจิ้มร้าน</button>
