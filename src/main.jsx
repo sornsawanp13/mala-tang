@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createClient } from '@supabase/supabase-js';
 import './style.css';
+import QRCode from 'qrcode';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -28,7 +29,51 @@ const money = value => Number(value || 0).toFixed(2);
 const newSauceRecipe = { name: '', description: '', price: '0', is_available: true, sort_order: '0' };
 const newSauceIngredient = { name: '', description: '', price_per_spoon: '0', max_spoons: '3', is_available: true, sort_order: '0' };
 
+function promptpayPayload(phone, amount) {
+  if (!/^0[0-9]{9}$/.test(phone) || !Number.isFinite(Number(amount)) || Number(amount) <= 0) throw new Error('ข้อมูล QR ไม่ถูกต้อง');
+  const tlv = (id, value) => id + String(value.length).padStart(2, '0') + value;
+  const account = tlv('00','A000000677010111') + tlv('01','0066'+phone.slice(1));
+  const body = '000201010212' + tlv('29',account) + '5303764' + tlv('54',Number(amount).toFixed(2)) + '5802TH6304';
+  let crc = 0xffff;
+  for (const c of body) {
+    crc ^= c.charCodeAt(0) << 8;
+    for (let i=0;i<8;i++) crc = ((crc << 1) ^ ((crc & 0x8000) ? 0x1021 : 0)) & 0xffff;
+  }
+  return body + crc.toString(16).toUpperCase().padStart(4,'0');
+}
+
 function App() {
+  const [paymentMethod,setPaymentMethod] = useState('cash');
+  const [payment,setPayment] = useState(null);
+  const [qr,setQr] = useState('');
+  const [slip,setSlip] = useState(null);
+  const [uploading,setUploading] = useState(false);
+  const uploadLock = React.useRef(false);
+  useEffect(() => {
+    let active=true;
+    setQr('');
+    if (payment?.payment_status === 'pending' && payment.promptpay_id && payment.upload_token) {
+      Promise.resolve().then(()=>QRCode.toDataURL(promptpayPayload(payment.promptpay_id,payment.total_amount),{width:320,margin:4,errorCorrectionLevel:'M'})).then(url=>{if(active)setQr(url);}).catch(()=>{if(active)setNotice('สร้าง QR ไม่สำเร็จ กรุณาติดต่อร้าน');});
+    }
+    return ()=>{active=false;};
+  },[payment]);
+  async function uploadSlip() {
+    if (!payment?.upload_token || uploadLock.current || !slip) return;
+    if (!['image/jpeg','image/png','image/webp'].includes(slip.type) || !slip.size || slip.size>5*1024*1024) return setNotice('กรุณาเลือกรูป JPG PNG หรือ WEBP ไม่เกิน 5 MB');
+    uploadLock.current=true; setUploading(true);
+    try {
+      const form=new FormData();
+      form.append('order_id',payment.order_id);
+      form.append('upload_token',payment.upload_token);
+      form.append('file',slip);
+      const {data,error}=await db.functions.invoke('upload-payment-slip',{body:form});
+      if(error || !data?.success || data.payment_status!=='reviewing') throw new Error('ยังยืนยันการส่งสลิปไม่ได้ กรุณากดตรวจสอบสถานะก่อนส่งซ้ำ');
+      setPayment({...payment,payment_status:'reviewing',upload_token:null,promptpay_id:null});
+      sessionStorage.removeItem('mala-v5-pending'); setPending(null); setSlip(null);
+      setNotice('ส่งสลิปแล้ว รอร้านตรวจสอบ');
+    } catch(e){setNotice(e.message);} finally {uploadLock.current=false;setUploading(false);}
+  }
+
   const [page, setPage] = useState('shop');
   const [ingredients, setIngredients] = useState([]);
   const [soups, setSoups] = useState([]);
@@ -405,12 +450,19 @@ function App() {
       const payload = pending || {
         idempotency_key:crypto.randomUUID(),
         request_token:Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join(''),
-        payment_method:'cash',
+        payment_method:paymentMethod,
         bowls:[...bowls.map(b=>b.payload),...(cart.length?[currentBowl()]:[])]
       };
       sessionStorage.setItem('mala-v5-pending',JSON.stringify(payload)); setPending(payload);
       const {data,error}=await db.functions.invoke('create-order-v5',{body:payload});
       if(error || !data?.success) throw new Error('ยังไม่ได้รับการยืนยัน กรุณาลองส่งคำขอเดิมอีกครั้ง');
+      if(data.payment_method==='promptpay') {
+        setPayment(data);
+        if(data.payment_status!=='pending') {sessionStorage.removeItem('mala-v5-pending');setPending(null);}
+        setCart([]);setBowls([]);setSauceCups([]);
+        setNotice('ออเดอร์ '+data.order_number+' · '+money(data.total_amount)+' บาท');
+        return;
+      }
       sessionStorage.removeItem('mala-v5-pending'); setPending(null);
       setCart([]); setBowls([]); setSauceCups([]);
       setNotice('รับออเดอร์ '+data.order_number+' ยอดชำระทั้งหมด '+money(data.total_amount)+' บาท กรุณาชำระเงินสดที่ร้าน');
@@ -481,6 +533,7 @@ function App() {
 
   async function updateOrder(id, status) {
     if (!db || !session || !isAdmin) return;
+    if (orders.find(o=>o.id===id)?.payment_status !== 'paid') return setNotice('ต้องตรวจสอบการชำระเงินก่อน');
 
     const { error } = await db
       .from('orders')
@@ -683,8 +736,20 @@ function App() {
           </section>
         ) : page === 'shop' ? (
           <>
-            {pending && <section className="panel"><p>มีคำขอเดิมที่ยังไม่ได้รับการยืนยัน กรุณาส่งซ้ำก่อนสั่งใหม่</p><button disabled={submitting} onClick={submitOrder}>ส่งคำขอเดิมอีกครั้ง</button></section>}
-            <fieldset disabled={!!pending || submitting} style={{border:0,padding:0,minWidth:0}}>
+            {payment && <section className="panel">
+              <h2>ออเดอร์ {payment.order_number}</h2>
+              <h3>ยอดชำระทั้งหมด {money(payment.total_amount)} บาท</h3>
+              {payment.payment_status==='pending' ? <>
+                <p>ระบบทดสอบ: ยังไม่ต้องโอนเงินจริง</p>
+                {qr && <img src={qr} alt="PromptPay QR" style={{width:280,maxWidth:'100%',display:'block',margin:'auto'}}/>}
+                <p>ตรวจสอบชื่อผู้รับและยอดเงินในแอปธนาคารก่อนโอน</p>
+                <label>แนบรูปสลิป<input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploading||submitting} onChange={e=>setSlip(e.target.files?.[0]||null)}/></label>
+                <button className="primary" disabled={!slip||!qr||uploading||submitting} onClick={uploadSlip}>{uploading?'กำลังส่งสลิป...':'ส่งสลิป'}</button>
+                <button disabled={uploading||submitting||!pending} onClick={submitOrder}>ตรวจสอบสถานะออเดอร์</button>
+              </> : <><p>{payment.payment_status==='reviewing'?'ส่งสลิปแล้ว รอร้านตรวจสอบ':payment.payment_status==='paid'?'ชำระเงินแล้ว':'สถานะ: '+payment.payment_status}</p><button onClick={()=>{setPayment(null);setSlip(null);}}>กลับหน้าสั่งอาหาร</button></>}
+            </section>}
+            {pending && !payment && <section className="panel"><p>มีคำขอเดิมที่ยังไม่ได้รับการยืนยัน กรุณาส่งซ้ำก่อนสั่งใหม่</p><button disabled={submitting} onClick={submitOrder}>ส่งคำขอเดิมอีกครั้ง</button></section>}
+            <fieldset disabled={!!pending || submitting || !!payment} style={{border:0,padding:0,minWidth:0}}>
             <h2>ถ้วยที่ {bowls.length+1} · เลือกวัตถุดิบ</h2>
             <p className="sub">
               เลือกจำนวนกรัม แล้วกดเพิ่มใส่ตะกร้า
@@ -954,6 +1019,8 @@ function App() {
 
               {bowls.map((b,i)=><div className="line" key={b.key}><span>ถ้วยที่ {i+1} · {b.weight} กรัม · {money(b.price)} บาท</span><button onClick={()=>setBowls(old=>old.filter(x=>x.key!==b.key))}>ลบถ้วย</button></div>)}
               <button disabled={!cart.length || cart.length>40 || bowls.length>=9 || (method==='soup'&&!soup)} onClick={addBowl}>+ เพิ่มถ้วยถัดไป</button>
+              <h3>เลือกวิธีชำระเงิน</h3>
+              <div className="choices"><button className={paymentMethod==='cash'?'active':''} onClick={()=>setPaymentMethod('cash')}>เงินสดที่ร้าน</button><button className={paymentMethod==='promptpay'?'active':''} onClick={()=>setPaymentMethod('promptpay')}>PromptPay QR</button></div>
               <button
                 className="primary"
                 disabled={(!cart.length&&!bowls.length)||cart.length>40||(!cart.length&&sauceCups.length>0)||(cart.length>0&&method==='soup'&&!soup)||submitting||!!pending}
@@ -965,8 +1032,7 @@ function App() {
               </button>
 
               <p className="sub">
-                ระบบทดสอบ ชำระเงินสดที่ร้าน
-                ยังไม่เปิดรับชำระเงินออนไลน์
+                ระบบทดสอบ ยังไม่เปิดรับเงินจริง
               </p>
             </section>
             </fieldset>
