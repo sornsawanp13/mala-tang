@@ -1312,6 +1312,11 @@ function App() {
                       const awaitingAcceptance=order.acceptance_required===true && !order.accepted_at && order.order_status==='pending';
                       const statusLabel=({pending:awaitingAcceptance?'รอตอบรับออเดอร์':'ออเดอร์ใหม่',preparing:'กำลังทำอาหาร',ready:order.fulfillment_type==='delivery'?'อาหารพร้อมส่ง':'อาหารพร้อมรับ',delivering:'กำลังนำส่ง',arrived:'อาหารมาถึงแล้ว',completed:'เสร็จสิ้น',cancelled:'ยกเลิก'})[order.order_status]||order.order_status;
                       const body=<>
+                        <details open={awaitingAcceptance || undefined} style={{margin:"12px 0",padding:12,border:"1px solid #d6bdb4",borderRadius:10,background:"#fff"}}>
+                        <summary style={{cursor:"pointer",fontSize:18,fontWeight:800,padding:8}}>ดูรายละเอียดออเดอร์</summary>
+                        <p>เวลาสั่ง: {new Date(order.created_at).toLocaleString("th-TH")}</p>
+                        {canManage && <><p>ลูกค้า: {order.customer_name || "ไม่ระบุ"} · โทร: {order.customer_phone || "ไม่ระบุ"}</p>{order.fulfillment_type === "delivery" && <><p>ที่อยู่: {order.delivery_address || "ไม่ระบุ"}</p>{order.delivery_latitude != null && order.delivery_longitude != null && <p><a href={`https://www.google.com/maps?q=${encodeURIComponent(order.delivery_latitude+","+order.delivery_longitude)}`} target="_blank" rel="noopener noreferrer">เปิดพิกัด GPS</a></p>}<p>หมายเหตุจัดส่ง: {order.delivery_note || "-"}</p></>}</>}
+                        {order.order_note && <p>หมายเหตุออเดอร์: {order.order_note}</p>}
                         <p>
                           {order.soup_name}
                           {' · '}
@@ -1319,7 +1324,7 @@ function App() {
                         </p>
 
                         <p>การรับอาหาร: {order.fulfillment_type==='delivery'?'จัดส่ง':'รับที่ร้าน'} {order.payment_method==='cod'?' · '+(order.cod_payment_type==='promptpay'?'ชำระผ่าน QR Code ปลายทาง':'ชำระเงินสดปลายทาง'):''}</p>
-                        {(order.order_bowls||[]).slice().sort((a,b)=>a.bowl_number-b.bowl_number).map(b=><section className="panel" key={b.id}><b>ถ้วยที่ {b.bowl_number} · {b.cooking_method==='dry'?'แบบแห้ง':b.soup_name} · {b.spice_level}</b>{(order.order_items||[]).filter(i=>i.bowl_id===b.id).map(i=><p key={i.id}>{i.ingredient_name} · {i.weight_grams} กรัม · {money(i.price)} บาท</p>)}{(order.order_sauces||[]).filter(c=>c.bowl_id===b.id).map(c=><p key={c.id}>น้ำจิ้ม {c.cup_number}: {c.sauce_name} {Array.isArray(c.ingredients)?c.ingredients.map(p=>`${p.name||p.ingredient_name||'ส่วนผสม'} ${p.spoons} ช้อน`).join(', '):''} · {money(c.price)} บาท</p>)}</section>)}
+                        {(order.order_bowls||[]).slice().sort((a,b)=>a.bowl_number-b.bowl_number).map(b=><section className="panel" key={b.id}><b>ถ้วยที่ {b.bowl_number} · {b.cooking_method==='dry'?'แบบแห้ง':b.soup_name} · {b.spice_level}</b>{b.bowl_note && <p>หมายเหตุถ้วย: {b.bowl_note}</p>}<p>น้ำหนัก {b.total_weight ?? "-"} กรัม · {money(b.total_amount)} บาท</p>{(order.order_items||[]).filter(i=>i.bowl_id===b.id).map(i=><p key={i.id}>{i.ingredient_name} · {i.weight_grams} กรัม · {money(i.price)} บาท</p>)}{(order.order_sauces||[]).filter(c=>c.bowl_id===b.id).map(c=><p key={c.id}>น้ำจิ้ม {c.cup_number}: {c.sauce_name} {Array.isArray(c.ingredients)?c.ingredients.map(p=>`${p.name||p.ingredient_name||'ส่วนผสม'} ${p.spoons} ช้อน`).join(', '):''} · {money(c.price)} บาท</p>)}</section>)}
                         <h3>รายการสินค้า</h3>
 
                         {(order.order_items || []).filter(i=>!(order.order_bowls||[]).some(b=>b.id===i.bowl_id)).map(
@@ -1366,9 +1371,11 @@ function App() {
 
                         <p>วิธีชำระเงิน: {({cash:'ชำระเงินสดที่ร้าน',promptpay:'ชำระผ่าน QR Code',cod:order.cod_payment_type==='promptpay'?'ชำระผ่าน QR Code ปลายทาง':'ชำระเงินสดปลายทาง'})[order.payment_method] || order.payment_method || '-'}</p>
                         <p>การชำระเงิน: {({pending:'รอชำระเงิน',reviewing:'รอตรวจสอบสลิป',paid:'ชำระแล้ว',rejected:'ปฏิเสธสลิป'})[order.payment_status] || order.payment_status}</p>
-                        <p>สถานะออเดอร์: {({pending:'รอดำเนินการ',preparing:'กำลังทำอาหาร',ready:'อาหารพร้อมส่งมอบ',delivering:'กำลังนำส่ง',arrived:'อาหารมาถึงแล้ว',completed:'เสร็จสิ้น'})[order.order_status] || order.order_status}</p>
+                        <p>ยอดรวม: <strong>{money(order.total_amount)} บาท</strong></p>
+                        <p>สถานะออเดอร์: {awaitingAcceptance ? "รอร้านตอบรับออเดอร์" : ({pending:'รอดำเนินการ',preparing:'กำลังทำอาหาร',ready:'อาหารพร้อมส่งมอบ',delivering:'กำลังนำส่ง',arrived:'อาหารมาถึงแล้ว',completed:'เสร็จสิ้น'})[order.order_status] || order.order_status}</p>
+                        </details>
                         <div className="choices">
-                          {canManage && awaitingAcceptance && <button disabled={orderBusy} onClick={()=>orderAction(order,'accept_customer_order')}>ตอบรับออเดอร์</button>}
+                          {canManage && awaitingAcceptance && <button disabled={orderBusy} onClick={()=>orderAction(order,'accept_customer_order')} style={{display:'block',width:'100%',flexBasis:'100%',minHeight:64,padding:'16px 20px',margin:'12px 0',background:'#15803d',color:'#fff',border:'2px solid #166534',borderRadius:12,fontSize:22,fontWeight:800,boxShadow:'0 3px 8px #0002',opacity:orderBusy?0.6:1}}>{orderBusy?'กำลังดำเนินการ…':'✓ ตอบรับออเดอร์'}</button>}
                           {owner && ['promptpay','cod'].includes(order.payment_method) && order.slip_url && <button onClick={()=>openSlip(order)}>เปิดดูสลิป</button>}
                           {owner && order.payment_status === 'reviewing' && ((order.payment_method==='promptpay'&&order.order_status==='pending')||(order.payment_method==='cod'&&order.cod_payment_type==='promptpay'&&['ready','arrived'].includes(order.order_status))) && order.slip_url && <>
                             <button disabled={orderBusy} onClick={()=>orderAction(order,'review_order_payment',true)}>อนุมัติการชำระเงิน</button>
