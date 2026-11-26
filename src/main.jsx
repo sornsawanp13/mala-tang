@@ -179,6 +179,7 @@ function App() {
 
   const [adminAccount, setAdminAccount] = useState(null);
   const [orderBusy, setOrderBusy] = useState(false);
+  const [rejectForm,setRejectForm]=useState(null);
   const orderLock = React.useRef(false);
   const owner = adminAccount?.user_id === session?.user?.id && adminAccount?.is_active === true && adminAccount?.role === 'owner';
   const canManage = owner || (adminAccount?.user_id === session?.user?.id && adminAccount?.is_active === true && adminAccount?.role === 'staff' && String(adminAccount?.permissions?.manage_orders) === 'true');
@@ -671,10 +672,12 @@ function App() {
     try {
       const args = {p_order_id: order.id};
       if (action === 'review_order_payment') args.p_approve = approve;
+      if (action === 'reject_customer_order') args.p_reason = approve;
       const {data,error} = await db.rpc(action,args);
       if (error) throw error;
       if (data !== true) throw new Error('สถานะไม่ตรงกับขั้นตอน กรุณาโหลดออเดอร์ใหม่');
       await loadOrders();
+      if(action==='reject_customer_order') setRejectForm(null);
       setNotice('อัปเดตออเดอร์สำเร็จ');
     } catch(e) { setNotice(e.message); }
     finally { orderLock.current = false; setOrderBusy(false); }
@@ -896,10 +899,11 @@ function App() {
               const payLabels={pending:'รอชำระเงิน',reviewing:'รอตรวจสอบสลิป',paid:'ชำระเงินเรียบร้อยแล้ว',rejected:'สลิปไม่ผ่านการตรวจสอบ'};
               return <section key={h.id} className="panel" style={{marginTop:16}}>
                 <h3>{o.order_number}</h3><h2>{money(o.total_amount)} บาท</h2>
-                <p>{({cash:'ชำระเงินสดที่ร้าน',promptpay:'ชำระผ่าน QR Code',cod:o.cod_payment_type==='promptpay'?'ชำระผ่าน QR Code ปลายทาง':'ชำระเงินสดปลายทาง'})[o.payment_method]||o.payment_method} · {waiting?'ยังไม่เปิดรับชำระเงิน':payLabels[o.payment_status]||o.payment_status}</p>
+                <p>{({cash:'ชำระเงินสดที่ร้าน',promptpay:'ชำระผ่าน QR Code',cod:o.cod_payment_type==='promptpay'?'ชำระผ่าน QR Code ปลายทาง':'ชำระเงินสดปลายทาง'})[o.payment_method]||o.payment_method} · {status==='cancelled' && o.payment_status==='pending'?'ไม่ต้องชำระเงิน':waiting?'ยังไม่เปิดรับชำระเงิน':payLabels[o.payment_status]||o.payment_status}</p>
                 {waiting && <p>กรุณารอร้านตอบรับก่อนชำระเงิน</p>}
                 {!waiting && o.accepted_at && status==='pending' && o.payment_method==='promptpay' && o.payment_status==='pending' && <button disabled={codBusy||!!pending||!!payment} onClick={()=>payAccepted(h)}>ชำระผ่าน QR Code</button>}
                 {o.payment_method==='cod' && o.cod_payment_type==='promptpay' && (delivery?status==='arrived':status==='ready') && ['pending','rejected'].includes(o.payment_status) && <button disabled={codBusy||!!pending||!!payment} onClick={()=>payCod(h,o.payment_status==='rejected')}>{o.payment_status==='rejected'?'ส่งสลิปใหม่':'ชำระผ่าน QR Code ปลายทาง'}</button>}
+                {status==='cancelled' && o.cancelled_by==='shop' && <div role="status" style={{padding:12,border:'1px solid #dc2626',borderRadius:8}}><strong>ร้านไม่สามารถรับออเดอร์ได้</strong><p>เหตุผล: {o.cancellation_reason||'ไม่ระบุ'}</p>{o.payment_status==='pending' && <p>ไม่ต้องชำระเงิน</p>}</div>}
                 {index<0?<p>สถานะ: {status==='cancelled'?'ยกเลิกแล้ว':status}</p>:steps.map(([key,label],i)=>{
                   const done=i<index||status==='completed';
                   return <p key={key} style={{color:done?'#15803d':i===index?'#b50920':'#6b7280',fontWeight:i===index||done?700:400}}>{done?'✓':i===index?'●':'○'} {label}</p>;
@@ -1376,6 +1380,16 @@ function App() {
                         </details>
                         <div className="choices">
                           {canManage && awaitingAcceptance && <button disabled={orderBusy} onClick={()=>orderAction(order,'accept_customer_order')} style={{display:'block',width:'100%',flexBasis:'100%',minHeight:64,padding:'16px 20px',margin:'12px 0',background:'#15803d',color:'#fff',border:'2px solid #166534',borderRadius:12,fontSize:22,fontWeight:800,boxShadow:'0 3px 8px #0002',opacity:orderBusy?0.6:1}}>{orderBusy?'กำลังดำเนินการ…':'✓ ตอบรับออเดอร์'}</button>}
+                          {canManage && awaitingAcceptance && <button disabled={orderBusy} style={{width:'100%',background:'#fff',color:'#b91c1c',border:'1px solid #b91c1c',padding:12}} onClick={()=>setRejectForm({id:order.id,reason:'สินค้าหมด',other:''})}>ปฏิเสธออเดอร์</button>}
+                          {canManage && awaitingAcceptance && rejectForm?.id===order.id && <div style={{width:'100%',padding:12,border:'1px solid #b91c1c',borderRadius:8}}>
+                            <strong>เลือกเหตุผลปฏิเสธ {order.order_number}</strong>
+                            {['สินค้าหมด','ร้านปิดแล้ว','ออเดอร์เต็ม','อยู่นอกพื้นที่จัดส่ง','เหตุผลอื่น ๆ'].map(r=><label key={r} style={{display:'block',padding:8}}><input type="radio" name={'reject-'+order.id} checked={rejectForm.reason===r} disabled={orderBusy} onChange={()=>setRejectForm(f=>({...f,reason:r}))}/> {r}</label>)}
+                            {rejectForm.reason==='เหตุผลอื่น ๆ' && <textarea maxLength={300} value={rejectForm.other} disabled={orderBusy} placeholder="ระบุเหตุผล" onChange={e=>setRejectForm(f=>({...f,other:e.target.value}))}/>}
+                            <p>ลูกค้าจะเห็นเหตุผลนี้และไม่ต้องชำระเงิน</p>
+                            <button disabled={orderBusy || (rejectForm.reason==='เหตุผลอื่น ๆ' && !rejectForm.other.trim())} style={{background:'#b91c1c',color:'#fff'}} onClick={()=>{if(window.confirm('ยืนยันปฏิเสธ '+order.order_number+'?')) orderAction(order,'reject_customer_order',rejectForm.reason==='เหตุผลอื่น ๆ'?rejectForm.other.trim():rejectForm.reason);}}>ยืนยันปฏิเสธ</button>
+                            <button disabled={orderBusy} onClick={()=>setRejectForm(null)}>กลับ</button>
+                          </div>}
+                          {order.order_status==='cancelled' && order.cancelled_by==='shop' && <p>ร้านปฏิเสธ: {order.cancellation_reason||'ไม่ระบุ'}</p>}
                           {owner && ['promptpay','cod'].includes(order.payment_method) && order.slip_url && <button onClick={()=>openSlip(order)}>เปิดดูสลิป</button>}
                           {owner && order.payment_status === 'reviewing' && ((order.payment_method==='promptpay'&&order.order_status==='pending')||(order.payment_method==='cod'&&order.cod_payment_type==='promptpay'&&['ready','arrived'].includes(order.order_status))) && order.slip_url && <>
                             <button disabled={orderBusy} onClick={()=>orderAction(order,'review_order_payment',true)}>อนุมัติการชำระเงิน</button>
