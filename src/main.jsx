@@ -60,6 +60,15 @@ function App() {
       setSlip(null);setPayment({...data,payment_method:'cod',payment_status:'pending'});setPage('shop');
     }catch(e){setNotice(e.message);}finally{setCodBusy(false);}
   }
+  async function payAccepted(h){
+    if(codBusy || uploading || pending || payment) return;
+    setCodBusy(true);
+    try {
+      const {data,error}=await db.rpc('prepare_accepted_payment',{p_order_id:h.id,p_tracking_token:h.token});
+      if(error||!data?.success)throw new Error(error?.message||'ยังไม่สามารถชำระเงินได้');
+      setSlip(null);setPayment({...data,payment_method:'promptpay'});setPage('shop');
+    }catch(e){setNotice(e.message);}finally{setCodBusy(false);}
+  }
   const [payment,setPayment] = useState(null);
   const [qr,setQr] = useState('');
   const [slip,setSlip] = useState(null);
@@ -565,6 +574,7 @@ function App() {
       const payload = pending || {
         idempotency_key:crypto.randomUUID(),
         request_token:Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join(''),
+        acceptance_required:true,
         payment_method:paymentMethod,
         fulfillment_type:fulfillment,
         ...(paymentMethod==='cod'?{cod_payment_type:codType}:{}),
@@ -574,7 +584,7 @@ function App() {
       const {data,error}=await db.functions.invoke('create-order-v5',{body:payload});
       if(error || !data?.success) throw new Error('ยังไม่ได้รับการยืนยัน กรุณาลองส่งคำขอเดิมอีกครั้ง');
       rememberOrder(data,data.tracking_token || payload.request_token);
-      if(data.payment_method==='promptpay') {
+      if(data.payment_method==='promptpay' && !data.waiting_for_acceptance && data.upload_token) {
         setPayment(data);
         if(data.payment_status!=='pending') {sessionStorage.removeItem('mala-v5-pending');setPending(null);}
         setCart([]);setBowls([]);setSauceCups([]);
@@ -584,6 +594,7 @@ function App() {
       sessionStorage.removeItem('mala-v5-pending'); setPending(null);
       setCart([]); setBowls([]); setSauceCups([]);
       setPage('tracking');
+      if(data.waiting_for_acceptance){setNotice('ส่งออเดอร์แล้ว รอร้านตอบรับ');return;}
       setNotice('รับออเดอร์ '+data.order_number+' ยอดชำระทั้งหมด '+money(data.total_amount)+' บาท '+(data.payment_method==='cod'?'ชำระเงินปลายทางเมื่อได้รับอาหาร':'กรุณาชำระเงินสดที่ร้าน'));
     } catch(e) { setNotice(e.message); }
     finally { submitLock.current=false; setSubmitting(false); }
@@ -878,13 +889,16 @@ function App() {
               const o=tracked[h.id];
               if(!o||o.error||o.missing)return <section key={h.id} className="panel"><b>{h.number}</b><p>{!o?'กำลังโหลด…':o.error?'เชื่อมต่อไม่ได้ กำลังลองใหม่':'ไม่พบออเดอร์หรือรหัสติดตามไม่ถูกต้อง'}</p></section>;
               const delivery=o.fulfillment_type==='delivery'||['delivering','out_for_delivery'].includes(o.order_status);
-              const steps=[['pending','ร้านได้รับออเดอร์แล้ว'],['preparing','กำลังทำอาหาร'],['ready',delivery?'อาหารพร้อมส่ง':'อาหารพร้อมรับ'],...(delivery?[['delivering','กำลังนำส่ง'],['arrived','อาหารมาถึงแล้ว']]:[]),['completed','ออเดอร์เสร็จสิ้น']];
-              const status=o.order_status==='out_for_delivery'?'delivering':o.order_status;
+              const waiting=o.waiting_for_acceptance===true;
+              const steps=[...(o.acceptance_required?[['waiting','รอตอบรับออเดอร์']]:[]),['pending',o.acceptance_required?'ร้านตอบรับออเดอร์แล้ว':'ร้านได้รับออเดอร์แล้ว'],['preparing','กำลังทำอาหาร'],['ready',delivery?'อาหารพร้อมส่ง':'อาหารพร้อมรับ'],...(delivery?[['delivering','กำลังนำส่ง'],['arrived','อาหารมาถึงแล้ว']]:[]),['completed','ออเดอร์เสร็จสิ้น']];
+              const status=waiting?'waiting':o.order_status==='out_for_delivery'?'delivering':o.order_status;
               const index=steps.findIndex(x=>x[0]===status);
               const payLabels={pending:'รอชำระเงิน',reviewing:'รอตรวจสอบสลิป',paid:'ชำระเงินเรียบร้อยแล้ว',rejected:'สลิปไม่ผ่านการตรวจสอบ'};
               return <section key={h.id} className="panel" style={{marginTop:16}}>
                 <h3>{o.order_number}</h3><h2>{money(o.total_amount)} บาท</h2>
-                <p>{({cash:'ชำระเงินสดที่ร้าน',promptpay:'ชำระผ่าน QR Code',cod:o.cod_payment_type==='promptpay'?'ชำระผ่าน QR Code ปลายทาง':'ชำระเงินสดปลายทาง'})[o.payment_method]||o.payment_method} · {payLabels[o.payment_status]||o.payment_status}</p>
+                <p>{({cash:'ชำระเงินสดที่ร้าน',promptpay:'ชำระผ่าน QR Code',cod:o.cod_payment_type==='promptpay'?'ชำระผ่าน QR Code ปลายทาง':'ชำระเงินสดปลายทาง'})[o.payment_method]||o.payment_method} · {waiting?'ยังไม่เปิดรับชำระเงิน':payLabels[o.payment_status]||o.payment_status}</p>
+                {waiting && <p>กรุณารอร้านตอบรับก่อนชำระเงิน</p>}
+                {!waiting && o.accepted_at && status==='pending' && o.payment_method==='promptpay' && o.payment_status==='pending' && <button disabled={codBusy||!!pending||!!payment} onClick={()=>payAccepted(h)}>ชำระผ่าน QR Code</button>}
                 {o.payment_method==='cod' && o.cod_payment_type==='promptpay' && (delivery?status==='arrived':status==='ready') && ['pending','rejected'].includes(o.payment_status) && <button disabled={codBusy||!!pending||!!payment} onClick={()=>payCod(h,o.payment_status==='rejected')}>{o.payment_status==='rejected'?'ส่งสลิปใหม่':'ชำระผ่าน QR Code ปลายทาง'}</button>}
                 {index<0?<p>สถานะ: {status==='cancelled'?'ยกเลิกแล้ว':status}</p>:steps.map(([key,label],i)=>{
                   const done=i<index||status==='completed';
@@ -1170,7 +1184,7 @@ function App() {
                 </button>
                 <input ref={slipInput} aria-label="แนบสลิปการโอนเงิน" type="file" accept="image/jpeg,image/png,image/webp" disabled={uploading||submitting} onChange={e=>{const file=e.target.files?.[0];if(file)setSlip(file);e.target.value='';}} style={{display:'none'}}/>
                 <button className="primary" style={{width:'100%',minHeight:48,borderRadius:8}} disabled={!slip||!qr||uploading||submitting} onClick={uploadSlip}>{uploading?'กำลังส่งสลิป...':'ส่งหลักฐานการชำระเงิน'}</button>
-                {payment.payment_method==='cod' && <button disabled={uploading} onClick={()=>{setPayment(null);setSlip(null);setPage('tracking');}}>กลับไปติดตามออเดอร์</button>}
+                {<button disabled={uploading} onClick={()=>{setPayment(null);setSlip(null);setPage('tracking');}}>กลับไปติดตามออเดอร์</button>}
                 {pending && <button disabled={uploading||submitting} onClick={submitOrder}>ตรวจสอบสถานะออเดอร์</button>}
               </> : <><p>{payment.payment_status==='reviewing'?'ส่งสลิปแล้ว รอร้านตรวจสอบ':payment.payment_status==='paid'?'ชำระเงินแล้ว':'สถานะ: '+payment.payment_status}</p><button onClick={()=>{setPayment(null);setSlip(null);setPage('tracking');}}>กลับไปติดตามออเดอร์</button></>}
             </section>}
@@ -1295,7 +1309,8 @@ function App() {
                     {[...activeOrders,...pastOrders].map((order,index) => {
                       const closed=closedOrder(order);
                       const color=({pending:'#b91c1c',preparing:'#cc802d',ready:'#367b40',delivering:'#2563eb',arrived:'#367b40'})[order.order_status]||'#666';
-                      const statusLabel=({pending:'ออเดอร์ใหม่',preparing:'กำลังทำอาหาร',ready:order.fulfillment_type==='delivery'?'อาหารพร้อมส่ง':'อาหารพร้อมรับ',delivering:'กำลังนำส่ง',arrived:'อาหารมาถึงแล้ว',completed:'เสร็จสิ้น',cancelled:'ยกเลิก'})[order.order_status]||order.order_status;
+                      const awaitingAcceptance=order.acceptance_required===true && !order.accepted_at && order.order_status==='pending';
+                      const statusLabel=({pending:awaitingAcceptance?'รอตอบรับออเดอร์':'ออเดอร์ใหม่',preparing:'กำลังทำอาหาร',ready:order.fulfillment_type==='delivery'?'อาหารพร้อมส่ง':'อาหารพร้อมรับ',delivering:'กำลังนำส่ง',arrived:'อาหารมาถึงแล้ว',completed:'เสร็จสิ้น',cancelled:'ยกเลิก'})[order.order_status]||order.order_status;
                       const body=<>
                         <p>
                           {order.soup_name}
@@ -1353,13 +1368,14 @@ function App() {
                         <p>การชำระเงิน: {({pending:'รอชำระเงิน',reviewing:'รอตรวจสอบสลิป',paid:'ชำระแล้ว',rejected:'ปฏิเสธสลิป'})[order.payment_status] || order.payment_status}</p>
                         <p>สถานะออเดอร์: {({pending:'รอดำเนินการ',preparing:'กำลังทำอาหาร',ready:'อาหารพร้อมส่งมอบ',delivering:'กำลังนำส่ง',arrived:'อาหารมาถึงแล้ว',completed:'เสร็จสิ้น'})[order.order_status] || order.order_status}</p>
                         <div className="choices">
+                          {canManage && awaitingAcceptance && <button disabled={orderBusy} onClick={()=>orderAction(order,'accept_customer_order')}>ตอบรับออเดอร์</button>}
                           {owner && ['promptpay','cod'].includes(order.payment_method) && order.slip_url && <button onClick={()=>openSlip(order)}>เปิดดูสลิป</button>}
                           {owner && order.payment_status === 'reviewing' && ((order.payment_method==='promptpay'&&order.order_status==='pending')||(order.payment_method==='cod'&&order.cod_payment_type==='promptpay'&&['ready','arrived'].includes(order.order_status))) && order.slip_url && <>
                             <button disabled={orderBusy} onClick={()=>orderAction(order,'review_order_payment',true)}>อนุมัติการชำระเงิน</button>
                             <button disabled={orderBusy} onClick={()=>orderAction(order,'review_order_payment',false)}>ปฏิเสธสลิป</button>
                           </>}
-                          {owner && order.payment_method === 'cash' && order.payment_status === 'pending' && order.order_status === 'pending' && <button disabled={orderBusy} onClick={()=>orderAction(order,'confirm_cash_payment')}>ยืนยันรับเงินสด</button>}
-                          {canManage && order.order_status === 'pending' && (order.payment_status === 'paid' || (order.payment_method === 'cod' && order.payment_status === 'pending')) && <button disabled={orderBusy} onClick={()=>orderAction(order,'start_paid_order')}>เริ่มทำอาหาร</button>}
+                          {!awaitingAcceptance && owner && order.payment_method === 'cash' && order.payment_status === 'pending' && order.order_status === 'pending' && <button disabled={orderBusy} onClick={()=>orderAction(order,'confirm_cash_payment')}>ยืนยันรับเงินสด</button>}
+                          {!awaitingAcceptance && canManage && order.order_status === 'pending' && (order.payment_status === 'paid' || (order.payment_method === 'cod' && order.payment_status === 'pending')) && <button disabled={orderBusy} onClick={()=>orderAction(order,'start_paid_order')}>เริ่มทำอาหาร</button>}
                           {canManage && order.order_status==='preparing' && (order.payment_status==='paid'||(order.payment_method==='cod'&&order.payment_status==='pending')) && <button disabled={orderBusy} onClick={()=>orderAction(order,'mark_order_ready')}>ทำอาหารเสร็จแล้ว</button>}
                           {canManage && order.fulfillment_type==='delivery' && order.order_status==='ready' && (order.payment_status==='paid'||(order.payment_method==='cod'&&order.payment_status==='pending')) && <button disabled={orderBusy} onClick={()=>orderAction(order,'start_order_delivery')}>เริ่มจัดส่ง</button>}
                           {canManage && order.fulfillment_type==='delivery' && order.order_status==='delivering' && <button disabled={orderBusy} onClick={()=>orderAction(order,'mark_order_arrived')}>อาหารมาถึงแล้ว</button>}
