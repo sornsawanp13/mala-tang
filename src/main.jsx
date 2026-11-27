@@ -1264,7 +1264,7 @@ function App() {
                 </button>
 
                 <div className="choices">
-                  <button
+                  <button style={{background:adminTab==='orders'?'#650b10':'#a71920',color:'#fff',borderColor:'#a71920',fontWeight:600}}
                     className={
                       adminTab === 'orders'
                         ? 'active'
@@ -1277,7 +1277,7 @@ function App() {
                     ออเดอร์
                   </button>
 
-                  <button
+                  <button style={{background:adminTab==='ingredients'?'#650b10':'#a71920',color:'#fff',borderColor:'#a71920',fontWeight:600}}
                     className={
                       adminTab === 'ingredients'
                         ? 'active'
@@ -1290,9 +1290,9 @@ function App() {
                   >
                     จัดการวัตถุดิบ
                   </button>
-                  {owner&&<><button onClick={()=>setAdminTab('finance')}>การเงิน</button><button onClick={()=>setAdminTab('inventory')}>สต็อกเพิ่มเติม</button></>}
-                  {owner&&<button className={adminTab==='soups'?'active':''} onClick={()=>{setAdminTab('soups');loadMenu();}}>จัดการน้ำซุป</button>}
-                  <button className={adminTab === 'sauces' ? 'active' : ''}
+                  {owner&&<><button style={{background:adminTab==='finance'?'#650b10':'#a71920',color:'#fff',borderColor:'#a71920',fontWeight:600}} onClick={()=>setAdminTab('finance')}>การเงิน</button><button style={{background:adminTab==='inventory'?'#650b10':'#a71920',color:'#fff',borderColor:'#a71920',fontWeight:600}} onClick={()=>setAdminTab('inventory')}>สต็อกเพิ่มเติม</button></>}
+                  {owner&&<button style={{background:adminTab==='soups'?'#650b10':'#a71920',color:'#fff',borderColor:'#a71920',fontWeight:600}} className={adminTab==='soups'?'active':''} onClick={()=>{setAdminTab('soups');loadMenu();}}>จัดการน้ำซุป</button>}
+                  <button style={{background:adminTab==='sauces'?'#650b10':'#a71920',color:'#fff',borderColor:'#a71920',fontWeight:600}} className={adminTab === 'sauces' ? 'active' : ''}
                     onClick={() => { setAdminTab('sauces'); loadSauces(); }}>
                     จัดการน้ำจิ้ม
                   </button>
