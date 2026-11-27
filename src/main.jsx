@@ -1290,6 +1290,7 @@ function App() {
                   >
                     จัดการวัตถุดิบ
                   </button>
+                  {owner&&<><button onClick={()=>setAdminTab('finance')}>การเงิน</button><button onClick={()=>setAdminTab('inventory')}>สต็อกเพิ่มเติม</button></>}
                   {owner&&<button className={adminTab==='soups'?'active':''} onClick={()=>{setAdminTab('soups');loadMenu();}}>จัดการน้ำซุป</button>}
                   <button className={adminTab === 'sauces' ? 'active' : ''}
                     onClick={() => { setAdminTab('sauces'); loadSauces(); }}>
@@ -1297,7 +1298,7 @@ function App() {
                   </button>
                 </div>
 
-                {adminTab === 'orders' ? (
+                {owner && adminTab === 'finance' ? <FinancePanel db={db}/> : owner && adminTab === 'inventory' ? <InventoryPanel db={db}/> : adminTab === 'orders' ? (
                   <>
                     <h2>รายการออเดอร์</h2>
 
@@ -1699,3 +1700,19 @@ function App() {
 createRoot(
   document.getElementById('root')
 ).render(<App />);
+
+function FinancePanel({db}) {
+ const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+ const [start,S]=useState(today),[end,E]=useState(today),[summary,U]=useState(null),[rows,R]=useState([]),[orders,O]=useState([]),[error,X]=useState(''),[busy,B]=useState(false);
+ async function load(){B(true);X('');U(null);R([]);O([]);try{const args={p_start:start,p_end:end};const results=await Promise.all(['shop_finance_summary','shop_finance_daily','shop_order_profit'].map(n=>db.rpc(n,args)));for(const r of results)if(r.error)throw r.error;U(results[0].data);R(results[1].data||[]);O(results[2].data||[]);}catch(e){X(e.message);}finally{B(false);}}
+ const money=v=>v==null?'ต้นทุนไม่ครบ':Number(v).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})+' บาท';
+ return <section><h2>รายงานการเงิน</h2><label>จาก <input type="date" value={start} onChange={e=>S(e.target.value)}/></label><label>ถึง <input type="date" value={end} onChange={e=>E(e.target.value)}/></label><button disabled={busy} onClick={load}>โหลดรายงาน</button><p role="alert">{error}</p>{summary&&<><p>ยอดขาย {money(summary.sales)} · {summary.orders} ออเดอร์</p><p>ต้นทุนที่บันทึก {money(summary.recorded_cost)}</p><p>ค่าใช้จ่าย {money(summary.expenses)}</p><h3 style={{color:summary.net_profit==null?'#b45309':summary.net_profit<0?'#dc2626':'#15803d'}}>{summary.net_profit==null?'ข้อมูลต้นทุนไม่ครบ':summary.net_profit<0?'ขาดทุนสุทธิ':summary.net_profit>0?'กำไรสุทธิ':'เท่าทุน'}: {money(summary.net_profit)}</h3><p>ออเดอร์ต้นทุนไม่ครบ {summary.incomplete_cost_orders}</p><h3>รายวัน</h3>{rows.map(r=><p key={r.report_date}>{r.report_date} | ยอดขาย {money(r.sales)} | สุทธิ {money(r.net_profit)}</p>)}<h3>แยกออเดอร์</h3>{orders.map(r=><p key={r.order_id}>{r.order_number} | ยอดขาย {money(r.revenue)} | กำไรขั้นต้น {money(r.gross_profit)}</p>)}</>}</section>;
+}
+function InventoryPanel({db}) {
+ const [rows,R]=useState([]),[units,U]=useState([]),[conversions,C]=useState([]),[id,I]=useState(''),[unit,V]=useState(''),[qty,Q]=useState(''),[cost,K]=useState(''),[kind,T]=useState('stock_in'),[note,N]=useState(''),[msg,M]=useState(''),[busy,B]=useState(false);
+ async function load(){try{const rs=await Promise.all(['inventory_resources','inventory_units','inventory_unit_conversions'].map(t=>db.from(t).select('*')));for(const r of rs)if(r.error)throw r.error;R(rs[0].data||[]);U(rs[1].data||[]);C(rs[2].data||[]);}catch(e){M(e.message);}}
+ useEffect(()=>{load();},[]);
+ const choices=conversions.filter(c=>c.resource_id===id&&units.some(u=>u.id===c.unit_id&&u.active));
+ async function save(e){e.preventDefault();if(busy||!id||!unit||!qty||!Number.isFinite(Number(qty))||(kind==='stock_in'&&(!cost.trim()||!Number.isFinite(Number(cost))))||!window.confirm('ยืนยันบันทึกการเปลี่ยนแปลงสต็อก?'))return;B(true);M('');try{const {error}=await db.rpc('change_inventory_stock',{p_resource_id:id,p_unit_id:unit,p_quantity:Number(qty),p_kind:kind,p_total_cost:kind==='stock_in'?Number(cost):null,p_note:note||null});if(error)throw error;Q('');K('');N('');M('บันทึกสำเร็จ');await load();}catch(e){M(e.message);}finally{B(false);}}
+ return <section><h2>สต็อกเพิ่มเติม</h2><button onClick={load}>รีเฟรช</button>{rows.map(r=>{const c=conversions.find(c=>c.resource_id===r.id&&c.unit_id===(r.display_unit_id||r.base_unit_id));return <p key={r.id}>{r.name}: {r.stock_quantity==null?'ยังไม่กำหนด':Number(r.stock_quantity)/Number(c?.base_quantity||1)} {units.find(u=>u.id===(r.display_unit_id||r.base_unit_id))?.name} {r.alert_enabled&&r.stock_quantity!=null&&Number(r.stock_quantity)<=Number(r.low_stock_quantity)?' — สต็อกต่ำ':''}</p>})}<form onSubmit={save}><h3>บันทึกสต็อก</h3><select required value={id} onChange={e=>{I(e.target.value);V('');}}><option value="">เลือกรายการ</option>{rows.filter(r=>r.active&&!r.ingredient_id&&!r.product_id).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select><select required value={unit} onChange={e=>V(e.target.value)}><option value="">เลือกหน่วย</option>{choices.map(c=><option key={c.unit_id} value={c.unit_id}>{units.find(u=>u.id===c.unit_id)?.name}</option>)}</select><select value={kind} onChange={e=>T(e.target.value)}><option value="stock_in">เติมสต็อก</option><option value="stock_out">เบิก</option><option value="waste">ของเสีย</option><option value="adjustment">ปรับเพิ่ม/ลด</option></select><label>ปริมาณ<input required type="number" step="any" value={qty} onChange={e=>Q(e.target.value)}/></label>{kind==='stock_in'&&<label>ต้นทุนซื้อรวม<input required type="number" min="0" step="any" value={cost} onChange={e=>K(e.target.value)}/></label>}<label>หมายเหตุ<input required={kind!=='stock_in'} value={note} onChange={e=>N(e.target.value)}/></label><button disabled={busy}>บันทึก</button></form><p role="status">{msg}</p></section>;
+}
