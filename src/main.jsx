@@ -45,6 +45,15 @@ function promptpayPayload(phone, amount) {
 }
 
 function App() {
+  const [salesConfig,setSalesConfig]=useState(null);
+  useEffect(()=>{
+    if(!db)return;
+    let active=true;
+    async function refreshSales(){const {data,error}=await db.from('sales_configuration').select('weighted_sales,show_images').eq('id',1).single();if(active)setSalesConfig(error?null:data);}
+    refreshSales();const timer=setInterval(refreshSales,15000);
+    window.addEventListener('focus',refreshSales);
+    return ()=>{active=false;clearInterval(timer);window.removeEventListener('focus',refreshSales);};
+  },[]);
   const [paymentMethod,setPaymentMethod] = useState('cash');
   const [fulfillment,setFulfillment]=useState('pickup');
   const [codType,setCodType]=useState('cash');
@@ -570,6 +579,7 @@ function App() {
 
   async function submitOrder() {
     if (!db || submitLock.current) return;
+    if (!pending && salesConfig?.weighted_sales !== true) return setNotice("ร้านยังไม่เปิดรับออเดอร์หม่าล่า");
     if (!pending && (invalidSpice || invalidSauces || (!cart.length && !bowls.length) || cart.length>40 || (cart.length && method==='soup'&&!soup) || (!cart.length && sauceCups.length))) return;
     submitLock.current=true; setSubmitting(true);
     try {
@@ -916,7 +926,8 @@ function App() {
         ) : page === 'shop' ? (
           <>
             {pending && !payment && <section className="panel"><p>มีคำขอเดิมที่ยังไม่ได้รับการยืนยัน กรุณาส่งซ้ำก่อนสั่งใหม่</p><button disabled={submitting} onClick={submitOrder}>ส่งคำขอเดิมอีกครั้ง</button></section>}
-            <fieldset disabled={!!pending || submitting || !!payment} style={{border:0,padding:0,minWidth:0}}>
+            {salesConfig?.weighted_sales !== true && !payment && <section className="panel" role="status">{salesConfig ? 'ร้านปิดรับออเดอร์หม่าล่าชั่วคราว' : 'กำลังตรวจสอบการตั้งค่าร้าน'}</section>}
+            <fieldset disabled={salesConfig?.weighted_sales !== true || !!pending || submitting || !!payment} style={{border:0,padding:0,minWidth:0}}>
             <h2>ถ้วยที่ {bowls.length+1} · เลือกวัตถุดิบ</h2>
             <p className="sub">
               เลือกจำนวนกรัม แล้วกดเพิ่มใส่ตะกร้า
@@ -947,7 +958,7 @@ function App() {
                           }}
                         >
                           <div className="emoji">
-                            {soldOut ? '🚫' : '🥢'}
+                            {soldOut ? '🚫' : salesConfig?.show_images && item.image_url ? <img src={item.image_url} alt={item.name} style={{width:'100%',maxHeight:120,objectFit:'contain'}}/> : '🥢'}
                           </div>
 
                           <div>
@@ -1776,5 +1787,5 @@ function SalesConfigurationPanel({db}) {
  async function load(){setBusy(true);setMessage('');try{const {data,error}=await db.from('sales_configuration').select('*').eq('id',1).single();if(error)throw error;setConfig(data);}catch(e){setMessage(e.message);}finally{setBusy(false);}}
  useEffect(()=>{load();},[]);
  async function save(){if(!config||busy)return;setBusy(true);setMessage('');try{const patch=Object.fromEntries(fields.map(([k])=>[k,config[k]===true]));const {data,error}=await db.from('sales_configuration').update(patch).eq('id',1).select().single();if(error)throw error;setConfig(data);setMessage('บันทึกการตั้งค่าล่วงหน้าแล้ว');}catch(e){setMessage(e.message);}finally{setBusy(false);}}
- return <section className="panel"><h2>ตั้งค่าการขาย</h2><p>ตั้งค่าล่วงหน้า: ยังไม่เปลี่ยนการขายจริงจนกว่าจะเชื่อมระบบหน้าลูกค้าและ POS</p><button type="button" disabled={busy} onClick={load}>โหลดการตั้งค่า</button>{config&&<><div style={{display:'grid',gap:12,margin:'16px 0'}}>{fields.map(([k,label])=><label key={k} style={{display:'flex',alignItems:'center',gap:12,padding:12,border:'1px solid #ddd',borderRadius:8}}><input type="checkbox" style={{width:20,height:20}} disabled={busy} checked={config[k]===true} onChange={e=>setConfig(prev=>({...prev,[k]:e.target.checked}))}/>{label}</label>)}</div><button type="button" className="primary" disabled={busy} onClick={save}>{busy?'กำลังบันทึก...':'บันทึกการตั้งค่า'}</button></>}<p role="status">{message}</p><p>ราคา หน่วยขาย หมวดหมู่ และรูปภาพรายสินค้า: ปรับในเมนูสินค้าและหมวดหมู่</p></section>;
+ return <section className="panel"><h2>ตั้งค่าการขาย</h2><p>การขายหม่าล่าและรูปวัตถุดิบมีผลกับหน้าลูกค้า ส่วนสินค้าทั่วไปและ POS ยังเป็นการตั้งค่าล่วงหน้า</p><button type="button" disabled={busy} onClick={load}>โหลดการตั้งค่า</button>{config&&<><div style={{display:'grid',gap:12,margin:'16px 0'}}>{fields.map(([k,label])=><label key={k} style={{display:'flex',alignItems:'center',gap:12,padding:12,border:'1px solid #ddd',borderRadius:8}}><input type="checkbox" style={{width:20,height:20}} disabled={busy} checked={config[k]===true} onChange={e=>setConfig(prev=>({...prev,[k]:e.target.checked}))}/>{label}</label>)}</div><button type="button" className="primary" disabled={busy} onClick={save}>{busy?'กำลังบันทึก...':'บันทึกการตั้งค่า'}</button></>}<p role="status">{message}</p><p>ราคา หน่วยขาย หมวดหมู่ และรูปภาพรายสินค้า: ปรับในเมนูสินค้าและหมวดหมู่</p></section>;
 }
